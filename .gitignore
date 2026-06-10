@@ -1,5 +1,6 @@
 .DS_Store
 node_modules/
+audit/
 
 # local-only: design references, old builds, agent config
 .claude/

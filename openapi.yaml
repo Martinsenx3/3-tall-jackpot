@@ -1,0 +1,196 @@
+openapi: 3.0.3
+info:
+  title: 3-TALL RGS API
+  version: 1.0.0
+  description: >
+    Spillserver-API for 3-TALL. Alle beløp er heltall i øre (NOK).
+    Pengeflyt mot operatørens lommebok beskrives i INTEGRATION.md —
+    dette er API-et spillklienten bruker mot RGS-en.
+servers:
+  - url: https://three-tall-jackpot.onrender.com
+  - url: http://localhost:8123
+paths:
+  /api/session:
+    post:
+      summary: Opprett spillsesjon
+      description: I operator-modus verifiseres launch-token mot operatørens plattform. I mock-modus opprettes en demospiller med 1 000 kr.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                token: { type: string, description: Engangs launch-token fra operatørens plattform (påkrevd i operator-modus) }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessionId: { type: string, format: uuid }
+                  mode: { type: string, enum: [mock, operator] }
+                  player: { type: object, properties: { id: { type: string }, name: { type: string } } }
+                  currency: { type: string, example: NOK }
+                  balanceOre: { type: integer }
+                  tickets:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        top: { type: array, items: { type: integer } }
+                        mid: { type: array, items: { type: integer }, description: Payline — kun denne raden teller }
+                        bottom: { type: array, items: { type: integer } }
+                  config:
+                    type: object
+                    properties:
+                      stakeOptionsOre: { type: array, items: { type: integer }, example: [200, 400, 800, 1600] }
+                      multipliers: { type: object, properties: { two: { type: integer }, three: { type: integer }, jackpot: { type: integer } } }
+                      intervalMs: { type: integer, example: 22000 }
+                      betCutoffMs: { type: integer, example: 1500 }
+                  jackpots: { $ref: "#/components/schemas/Jackpots" }
+                  round: { $ref: "#/components/schemas/RoundInfo" }
+        "401": { $ref: "#/components/responses/Error" }
+  /api/tickets:
+    post:
+      summary: Generer nye bonger for sesjonen
+      requestBody: { $ref: "#/components/requestBodies/SessionOnly" }
+      responses:
+        "200": { description: Nye bonger }
+        "409": { description: BET_ACTIVE — aktivt kjøp må avbrytes først }
+  /api/bet:
+    post:
+      summary: Kjøp neste runde
+      description: >
+        Debiterer operatør-lommeboken umiddelbart (txId `bet-{betId}`, idempotent).
+        Avvises etter innsats-stenging (1,5 s før trekning). Ett kjøp per sesjon per runde.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sessionId, stakeOre, active]
+              properties:
+                sessionId: { type: string }
+                stakeOre: { type: integer, enum: [200, 400, 800, 1600] }
+                active: { type: array, items: { type: integer, minimum: 0, maximum: 3 }, description: Hvilke bonger som spiller }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  betId: { type: string, format: uuid }
+                  roundId: { type: integer }
+                  amountOre: { type: integer }
+                  balanceOre: { type: integer, nullable: true }
+        "400": { description: INVALID_STAKE / INVALID_TICKETS }
+        "402": { description: INSUFFICIENT_FUNDS }
+        "409": { description: WINDOW_CLOSED / ALREADY_BET }
+  /api/bet/cancel:
+    post:
+      summary: Avbryt kjøp (full refusjon) før vinduet stenger
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sessionId, betId]
+              properties:
+                sessionId: { type: string }
+                betId: { type: string }
+      responses:
+        "200": { description: Tilbakeført (txId `rb-bet-{betId}`) }
+        "404": { description: NO_BET }
+        "409": { description: WINDOW_CLOSED — innsatsen står }
+  /api/state:
+    get:
+      summary: Sesjonstilstand (saldo, aktivt kjøp, siste resultat, jackpotter, rundetiming)
+      parameters:
+        - in: query
+          name: sessionId
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  balanceOre: { type: integer, nullable: true }
+                  bet:
+                    type: object
+                    nullable: true
+                    properties:
+                      betId: { type: string }
+                      roundId: { type: integer }
+                      stakeOre: { type: integer }
+                      active: { type: array, items: { type: integer } }
+                  lastResult:
+                    type: object
+                    nullable: true
+                    properties:
+                      roundId: { type: integer }
+                      winOre: { type: integer }
+                      breakdown:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            bong: { type: integer }
+                            type: { type: string, enum: [2-rette, 3-rette, jackpot] }
+                            amountOre: { type: integer }
+                  jackpots: { $ref: "#/components/schemas/Jackpots" }
+                  round: { $ref: "#/components/schemas/RoundInfo" }
+  /api/topup:
+    post:
+      summary: Demo-påfyll (KUN mock-modus)
+      requestBody: { $ref: "#/components/requestBodies/SessionOnly" }
+      responses:
+        "200": { description: Ny saldo }
+        "403": { description: NOT_AVAILABLE i operator-modus }
+  /events:
+    get:
+      summary: SSE-strøm av den felles trekningen
+      description: >
+        `event: hello` ved tilkobling {round, msToNext, intervalMs, jackpots};
+        `event: round` per trekning {n, numbers[4], intervalMs, jackpots}.
+        Keepalive-ping hvert 20. sekund.
+      responses:
+        "200": { description: text/event-stream }
+components:
+  requestBodies:
+    SessionOnly:
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [sessionId]
+            properties:
+              sessionId: { type: string }
+  schemas:
+    Jackpots:
+      type: object
+      description: Felles progressive potter i øre, per innsatsnivå
+      properties:
+        low: { type: integer, description: "Nivå 2–4 kr" }
+        high: { type: integer, description: "Nivå 8–16 kr" }
+    RoundInfo:
+      type: object
+      properties:
+        n: { type: integer, description: Sist trukne runde }
+        next: { type: integer, description: Runden kjøp gjelder }
+        msToNext: { type: integer }
+        bettingOpen: { type: boolean }
+  responses:
+    Error:
+      description: Feil
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error: { type: string }
+              message: { type: string }
