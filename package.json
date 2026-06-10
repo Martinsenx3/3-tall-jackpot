@@ -1,0 +1,12 @@
+{
+  "name": "3-tall-jackpot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "3-TALL — multiplayer lottery game (play money). Server is the source of truth for the shared draw.",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

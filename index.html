@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="no" data-theme="safir">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="3-TALL — flerspiller-lotterispill med felles trekning hvert 22. sekund. Spill med lekepenger." />
+  <title>3-TALL</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='46' fill='%23f1c25a'/%3E%3Ccircle cx='50' cy='50' r='34' fill='%23fff7e0'/%3E%3Ctext x='50' y='64' font-size='42' text-anchor='middle' font-family='Arial' font-weight='bold' fill='%231a1208'%3E3%3C/text%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700;800&family=Oswald:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="stage">
+    <div id="canvas">
+      <div id="sparkles"></div>
+      <div id="coins"></div>
+
+      <!-- CONNECTION -->
+      <div class="conn" id="conn"><span class="conn-dot"></span><span id="connText">Kobler til…</span></div>
+
+      <!-- THEME SWITCHER -->
+      <div class="themes" id="themeSwitcher" aria-label="Fargetema">
+        <button class="theme-dot t-safir is-active" data-theme="safir" type="button" title="Safir" aria-label="Safir"></button>
+        <button class="theme-dot t-obsidian" data-theme="obsidian" type="button" title="Obsidian" aria-label="Obsidian"></button>
+        <button class="theme-dot t-smaragd" data-theme="smaragd" type="button" title="Smaragd" aria-label="Smaragd"></button>
+        <button class="theme-dot t-vinrod" data-theme="vinrod" type="button" title="Vinrød" aria-label="Vinrød"></button>
+      </div>
+
+      <div class="wrap">
+
+        <!-- JACKPOT -->
+        <div class="jackpot frame">
+          <div class="bulbs" id="bulbs"></div>
+          <div class="tag cinzel"><span class="crown gold">♛</span><span class="gold">3-TALL JACKPOT</span></div>
+          <div class="jp-tier" id="jackpotTier">8–16 KR</div>
+          <div class="display">
+            <div class="glowbg"></div>
+            <div class="amount tnum"><span id="jackpotAmount">1 500</span><span class="kr">KR</span></div>
+            <div class="sub">VINN PÅ 2 ELLER 3 TALL!</div>
+          </div>
+        </div>
+
+        <!-- TIERS + HOT/COLD -->
+        <div class="row subrow">
+          <div class="tiers">
+            <div class="tier green frame"><div class="tl">2 RETTE</div><div class="tv gold tnum" id="tier2">40 KR</div><div class="ts">2 TALL</div></div>
+            <div class="tier red frame"><div class="tl">3 RETTE</div><div class="tv gold tnum" id="tier3">400 KR</div><div class="ts">3 TALL PÅ 4 TREKK</div></div>
+            <div class="tier jp frame"><div class="tl">JACKPOT!</div><div class="tv gold tnum" id="tierJp">400 KR +</div><div class="ts">3 TALL PÅ 3 FØRSTE</div></div>
+          </div>
+          <div class="hotcold panel frame">
+            <div class="hc-title">HOT / COLD</div>
+            <div class="hc-cols">
+              <div class="hc hot">
+                <div class="ico"><span class="flame"></span></div><h4>HOT</h4>
+                <div class="hc-balls" id="hotNumbers"></div>
+              </div>
+              <div class="hc cold">
+                <div class="ico"><span class="snow">❄</span></div><h4>COLD</h4>
+                <div class="hc-balls" id="coldNumbers"></div>
+              </div>
+            </div>
+            <div class="hc-foot">SISTE 10 RUNDER</div>
+          </div>
+        </div>
+
+        <!-- MAIN -->
+        <div class="main">
+          <div class="col">
+            <div class="bong panel frame" data-bong="0">
+              <div class="head"><span class="nm">BONG 1</span><button class="x" data-toggle="0" type="button" aria-label="Fjern bong 1">✕</button></div>
+              <div class="cells" id="cells-0"></div>
+            </div>
+            <div class="bong panel frame" data-bong="2">
+              <div class="head"><span class="nm">BONG 3</span><button class="x" data-toggle="2" type="button" aria-label="Fjern bong 3">✕</button></div>
+              <div class="cells" id="cells-2"></div>
+            </div>
+          </div>
+
+          <div class="col center">
+            <div class="machine">
+              <div class="cap"></div>
+              <div class="sphere">
+                <div class="cage"></div><div class="cage b"></div>
+                <div class="balls" id="machineBalls"></div>
+                <div class="reveal" id="revealBall" aria-hidden="true"></div>
+              </div>
+              <div class="base"></div><div class="base2"></div>
+            </div>
+            <div class="drawn">
+              <div class="lab">TREKTE TALL</div>
+              <div class="row2" id="drawnNumbers"></div>
+            </div>
+          </div>
+
+          <div class="col">
+            <div class="bong panel frame" data-bong="1">
+              <div class="head"><span class="nm">BONG 2</span><button class="x" data-toggle="1" type="button" aria-label="Fjern bong 2">✕</button></div>
+              <div class="cells" id="cells-1"></div>
+            </div>
+            <div class="bong panel frame" data-bong="3">
+              <div class="head"><span class="nm">BONG 4</span><button class="x" data-toggle="3" type="button" aria-label="Fjern bong 4">✕</button></div>
+              <div class="cells" id="cells-3"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- CONTROLS -->
+        <div class="controls">
+          <button class="btn start" id="joinButton" type="button">BLI MED</button>
+          <button class="btn secondary" id="newTicketsButton" type="button">NYE BONGER</button>
+          <div class="stats">
+            <div class="stat panel frame stake-stat"><span class="k">INNSATS PR. BONG</span>
+            <div class="stake-opts" id="stakeOpts">
+              <button class="stake-opt" data-stake="2" type="button">2</button>
+              <button class="stake-opt" data-stake="4" type="button">4</button>
+              <button class="stake-opt is-active" data-stake="8" type="button">8</button>
+              <button class="stake-opt" data-stake="16" type="button">16</button>
+            </div>
+          </div>
+            <div class="stat panel frame countdown-stat"><span class="k">NESTE TREKNING</span><span class="v tnum" id="countdown">–</span></div>
+            <div class="stat panel frame"><span class="k">TOTAL INNSATS</span><span class="v tnum" id="totalStake">40 KR</span></div>
+            <div class="stat panel frame"><span class="k">SALDO</span><span class="v tnum" id="playerBalance">1 000 KR</span>
+              <button id="topupButton" class="topup" type="button" hidden>FYLL PÅ</button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- OVERLAYS -->
+      <div class="winflash" id="winFlash" aria-live="polite">
+        <div class="winflash-inner">
+          <span class="winflash-label" id="winType">Gevinst</span>
+          <strong class="gold" id="winAmount">0 KR</strong>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>

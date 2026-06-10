@@ -1,0 +1,9 @@
+.DS_Store
+node_modules/
+
+# local-only: design references, old builds, agent config
+.claude/
+backup-v1/
+assets/
+Inspirasjon bilder/
+Inspirasjon bilder-kopi/

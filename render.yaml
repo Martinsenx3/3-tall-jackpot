@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: 3-tall-jackpot
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /
+    autoDeploy: true
