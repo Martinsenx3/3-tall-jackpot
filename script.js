@@ -582,11 +582,14 @@ async function boot() {
    ============================================================ */
 (function fitCanvas() {
   const canvas = document.getElementById("canvas");
+  const mobile = window.matchMedia("(max-width: 820px)");
   function fit() {
+    if (mobile.matches) { canvas.style.transform = "none"; return; } // mobile uses the reflowed vertical layout
     const s = Math.min(window.innerWidth / 1600, window.innerHeight / 1000);
     canvas.style.transform = `scale(${s})`;
   }
   window.addEventListener("resize", fit);
+  if (mobile.addEventListener) mobile.addEventListener("change", () => { fit(); placeBulbs(); });
   fit();
 })();
 
