@@ -17,10 +17,11 @@
       <div id="sparkles"></div>
       <div id="coins"></div>
 
-      <!-- CONNECTION -->
-      <div class="conn" id="conn"><span class="conn-dot"></span><span id="connText">Kobler til…</span></div>
+      <!-- CONNECTION + LIVE PLAYER COUNT -->
+      <div class="conn" id="conn"><span class="conn-dot"></span><span id="connText">Kobler til…</span><span class="players" id="players" hidden>👥 <b id="playerCount">1</b></span></div>
 
-      <!-- THEME SWITCHER -->
+      <!-- TOP CONTROLS: sound + theme -->
+      <button class="sound-btn" id="soundBtn" type="button" aria-label="Lyd av/på" title="Lyd">🔊</button>
       <div class="themes" id="themeSwitcher" aria-label="Fargetema">
         <button class="theme-dot t-safir is-active" data-theme="safir" type="button" title="Safir" aria-label="Safir"></button>
         <button class="theme-dot t-obsidian" data-theme="obsidian" type="button" title="Obsidian" aria-label="Obsidian"></button>
@@ -129,11 +130,26 @@
 
       </div>
 
+      <!-- LIVE WINNERS TICKER -->
+      <div class="ticker" id="ticker" aria-hidden="true">
+        <div class="ticker-track" id="tickerTrack"></div>
+      </div>
+
       <!-- OVERLAYS -->
+      <div class="confetti" id="confetti" aria-hidden="true"></div>
       <div class="winflash" id="winFlash" aria-live="polite">
         <div class="winflash-inner">
           <span class="winflash-label" id="winType">Gevinst</span>
           <strong class="gold" id="winAmount">0 KR</strong>
+        </div>
+      </div>
+      <div class="jp-takeover" id="jpTakeover" aria-hidden="true">
+        <div class="jp-takeover-inner">
+          <div class="jp-rays"></div>
+          <span class="jp-crown">♛</span>
+          <span class="jp-title">JACKPOT!</span>
+          <strong class="jp-amount" id="jpTakeoverAmount">0 KR</strong>
+          <span class="jp-sub" id="jpTakeoverSub">vunnet nå</span>
         </div>
       </div>
 

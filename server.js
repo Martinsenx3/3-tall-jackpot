@@ -157,6 +157,7 @@ async function runRound() {
 
   /* 3) evaluate every bet — each bong pays independently */
   const settledThis = new Map();
+  const roundWinners = []; // anonymized {amountOre, type} for the social feed
   for (const bet of bets.values()) {
     const tier = tierOf(bet.stakeOre);
     const breakdown = [];
@@ -180,6 +181,9 @@ async function runRound() {
 
     let balanceAfter = null;
     if (winOre > 0) {
+      const topType = breakdown.some((b) => b.type === "jackpot") ? "jackpot"
+        : breakdown.some((b) => b.type === "3-rette") ? "3-rette" : "2-rette";
+      roundWinners.push({ amountOre: winOre, type: topType });
       try {
         const receipt = await wallet.credit({
           playerId: bet.playerId,
@@ -206,8 +210,23 @@ async function runRound() {
     for (const key of m.keys()) if (key < thisRound - KEEP_ROUNDS) m.delete(key);
   }
 
-  broadcast("round", { n: thisRound, numbers, intervalMs: ROUND_INTERVAL, jackpots: publicJackpots() });
-  console.log(`[runde ${thisRound}] trakk ${numbers.join(", ")} · ${bets.size} bet(s) · ${clients.size} tilkoblet`);
+  broadcast("round", { n: thisRound, numbers, intervalMs: ROUND_INTERVAL, jackpots: publicJackpots(), players: clients.size });
+
+  /* social: aggregate, anonymized results for the live ticker + shared jackpot FX */
+  const totalWonOre = roundWinners.reduce((s, w) => s + w.amountOre, 0);
+  const biggestOre = roundWinners.reduce((m, w) => Math.max(m, w.amountOre), 0);
+  const jpShareMax = Math.max(jpShare.low, jpShare.high);
+  broadcast("results", {
+    round: thisRound,
+    players: clients.size,
+    bettors: bets.size,
+    winners: roundWinners.length,
+    totalWonOre,
+    biggestOre,
+    feed: roundWinners.sort((a, b) => b.amountOre - a.amountOre).slice(0, 6),
+    jackpot: (jpWinners.low.length + jpWinners.high.length) > 0 ? { shareOre: jpShareMax } : null,
+  });
+  console.log(`[runde ${thisRound}] trakk ${numbers.join(", ")} · ${bets.size} bet(s) · ${roundWinners.length} vinner(e) · ${clients.size} tilkoblet`);
 }
 
 /* ---------- SSE ---------- */
@@ -216,6 +235,7 @@ function send(res, event, data) {
   try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch (e) { /* client gone */ }
 }
 function broadcast(event, data) { for (const res of clients) send(res, event, data); }
+function broadcastPlayers() { broadcast("players", { players: clients.size }); }
 setInterval(() => { for (const res of clients) { try { res.write(":ping\n\n"); } catch (e) { /* */ } } }, 20000);
 
 /* ---------- helpers: http ---------- */
@@ -480,9 +500,11 @@ const server = http.createServer(async (req, res) => {
       msToNext: Math.max(0, nextRoundAt - Date.now()),
       intervalMs: ROUND_INTERVAL,
       jackpots: publicJackpots(),
+      players: clients.size + 1,
     });
     clients.add(res);
-    req.on("close", () => clients.delete(res));
+    broadcastPlayers();
+    req.on("close", () => { clients.delete(res); broadcastPlayers(); });
     return;
   }
 

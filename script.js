@@ -62,6 +62,15 @@ const winFlashEl = document.getElementById("winFlash");
 const winAmountEl = document.getElementById("winAmount");
 const winTypeEl = document.getElementById("winType");
 const topupButton = document.getElementById("topupButton");
+const soundBtn = document.getElementById("soundBtn");
+const playersEl = document.getElementById("players");
+const playerCountEl = document.getElementById("playerCount");
+const tickerTrackEl = document.getElementById("tickerTrack");
+const confettiEl = document.getElementById("confetti");
+const jpTakeoverEl = document.getElementById("jpTakeover");
+const jpTakeoverAmountEl = document.getElementById("jpTakeoverAmount");
+let pendingResults = null;
+let lastCdSecond = null;
 
 /* ---------- helpers ---------- */
 function formatKr(ore) {
@@ -82,6 +91,83 @@ async function api(path, opts) {
 }
 const post = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
+/* ---------- sound (synthesized Web Audio — no asset files) ---------- */
+const Sound = (() => {
+  let ctx = null;
+  let muted = localStorage.getItem("muted") === "1";
+  function ensure() {
+    if (!ctx) { const AC = window.AudioContext || window.webkitAudioContext; if (AC) ctx = new AC(); }
+    if (ctx && ctx.state === "suspended") ctx.resume();
+    return ctx;
+  }
+  function tone(freq, dur, o = {}) {
+    if (muted) return; const c = ensure(); if (!c) return;
+    const t = c.currentTime + (o.delay || 0);
+    const osc = c.createOscillator(); const g = c.createGain();
+    osc.type = o.type || "sine"; osc.frequency.setValueAtTime(freq, t);
+    if (o.slideTo) osc.frequency.exponentialRampToValueAtTime(o.slideTo, t + dur);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(o.gain || 0.18, t + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    osc.connect(g).connect(c.destination); osc.start(t); osc.stop(t + dur + 0.03);
+  }
+  const arp = (freqs, step, o) => freqs.forEach((f, i) => tone(f, (o && o.dur) || 0.3, Object.assign({}, o, { delay: i * step })));
+  return {
+    resume: ensure,
+    get muted() { return muted; },
+    toggle() { muted = !muted; localStorage.setItem("muted", muted ? "1" : "0"); if (!muted) ensure(); return muted; },
+    click() { tone(420, 0.05, { type: "square", gain: 0.07 }); },
+    reveal() { tone(280, 0.95, { type: "sine", gain: 0.1, slideTo: 720 }); },
+    land() { tone(170, 0.18, { type: "sine", gain: 0.22, slideTo: 90 }); tone(120, 0.12, { type: "triangle", gain: 0.1 }); },
+    heartbeat() { tone(66, 0.16, { type: "sine", gain: 0.3, slideTo: 48 }); tone(66, 0.16, { type: "sine", gain: 0.3, slideTo: 48, delay: 0.26 }); },
+    tick() { tone(680, 0.05, { type: "square", gain: 0.09 }); },
+    win2() { arp([523, 659], 0.08, { type: "triangle", gain: 0.16, dur: 0.26 }); },
+    win3() { arp([523, 659, 784, 1046], 0.085, { type: "triangle", gain: 0.18, dur: 0.32 }); },
+    jackpot() { arp([523, 659, 784, 1046, 1318, 1568], 0.11, { type: "sawtooth", gain: 0.15, dur: 0.5 }); arp([262, 330, 392], 0.11, { type: "sine", gain: 0.1, dur: 0.6 }); },
+  };
+})();
+
+/* ---------- celebration FX + social ---------- */
+function spawnConfetti(count, withCoins) {
+  const colors = ["#ffd76a", "#ff6b6b", "#5fa8ff", "#7ee29c", "#c595f5", "#fff3c4"];
+  for (let k = 0; k < count; k += 1) {
+    const el = document.createElement("span");
+    const coin = withCoins && Math.random() > 0.55;
+    el.className = `cfetti${coin ? " coin" : ""}`;
+    if (!coin) el.style.background = colors[Math.floor(Math.random() * colors.length)];
+    el.style.left = `${Math.random() * 100}%`;
+    el.style.animationDuration = `${1.6 + Math.random() * 1.6}s`;
+    el.style.animationDelay = `${Math.random() * 0.4}s`;
+    confettiEl.appendChild(el);
+    setTimeout(() => el.remove(), 3600);
+  }
+}
+function screenShake() {
+  const c = document.getElementById("canvas");
+  c.classList.remove("shake"); void c.offsetWidth; c.classList.add("shake");
+}
+function jackpotTakeover(amountOre, sub) {
+  jpTakeoverAmountEl.textContent = formatKr(amountOre);
+  document.getElementById("jpTakeoverSub").textContent = sub || "vunnet nå";
+  jpTakeoverEl.classList.add("show");
+  Sound.jackpot(); spawnConfetti(120, true); screenShake();
+  setTimeout(() => jpTakeoverEl.classList.remove("show"), 4200);
+}
+function pushTicker(feed) {
+  if (!feed || !feed.length) return;
+  const items = feed.map((w) => {
+    const cls = w.type === "jackpot" ? "tick-item jp" : "tick-item";
+    const label = w.type === "jackpot" ? "🎰 JACKPOT" : w.type === "3-rette" ? "🎉 3 rette" : "✨ 2 rette";
+    return `<span class="${cls}">${label} · <span class="amt">${formatKr(w.amountOre)}</span></span>`;
+  }).join("");
+  tickerTrackEl.innerHTML = items + items; // duplicate for seamless scroll
+}
+function setPlayers(n) {
+  if (typeof n !== "number") return;
+  playerCountEl.textContent = String(n);
+  playersEl.hidden = false;
+}
+
 /* ---------- info displays ---------- */
 function updatePlayerInfo() {
   totalStakeEl.textContent = formatKr(roundStakeOre());
@@ -99,9 +185,14 @@ function updateJackpotBoard() {
   if (jackpotTierEl) jackpotTierEl.textContent = tier === "low" ? "2–4 KR" : "8–16 KR";
 }
 function showWinFlash(amountOre, label) {
+  if (label === "JACKPOT!") { jackpotTakeover(amountOre, "din gevinst!"); return; }
   winAmountEl.textContent = formatKr(amountOre);
   winTypeEl.textContent = label;
+  const big = label === "3 RETTE";
+  winFlashEl.classList.toggle("big", big);
   winFlashEl.classList.add("show");
+  if (big) { Sound.win3(); spawnConfetti(80, true); screenShake(); }
+  else { Sound.win2(); spawnConfetti(28, false); }
   if (winTimer) clearTimeout(winTimer);
   winTimer = setTimeout(() => winFlashEl.classList.remove("show"), 2600);
 }
@@ -205,12 +296,14 @@ function runRound(roundId, numbers) {
 
   const drawn = [];
   let i = 0;
+  let tenseNext = false;
   function step() {
     const n = numbers[i];
-    revealEl.className = `reveal ${ballTone(n)}`;
+    revealEl.className = `reveal ${ballTone(n)}${tenseNext ? " tense" : ""}`;
     revealEl.innerHTML = `<span class="face">${n}</span>`;
     void revealEl.offsetWidth;
     revealEl.classList.add("fill");
+    Sound.reveal();
     drawTimer = setTimeout(() => {
       revealEl.classList.remove("fill");
       revealEl.classList.add("drop");
@@ -219,12 +312,17 @@ function runRound(roundId, numbers) {
         revealEl.innerHTML = "";
         drawn.push(n);
         addDrawnBall(n);
+        Sound.land();
         if (participating) { markHits(n, idxs); updateNearWin(drawn, idxs); }
         i += 1;
-        const near = participating && idxs.some((id) => getHitCount(myTickets[id].mid, drawn) === 2);
+        const near = participating && i < numbers.length && idxs.some((id) => getHitCount(myTickets[id].mid, drawn) === 2);
+        tenseNext = near;
+        machineEl.classList.toggle("tense", near);
+        if (near) Sound.heartbeat();
         if (i < numbers.length) {
           drawTimer = setTimeout(step, near ? SUSPENSE_MS : BETWEEN_MS);
         } else {
+          machineEl.classList.remove("tense");
           drawTimer = setTimeout(() => finishRound(roundId), END_MS);
         }
       }, DROP_MS);
@@ -248,10 +346,19 @@ async function finishRound(roundId) {
     updatePlayerInfo();
     updateJackpotBoard();
     updateControls();
+    const iWonJackpot = wasParticipating && s.lastResult && s.lastResult.roundId === roundId
+      && s.lastResult.breakdown.some((b) => b.type === "jackpot");
     if (wasParticipating && s.lastResult && s.lastResult.roundId === roundId && s.lastResult.winOre > 0) {
       const types = s.lastResult.breakdown.map((b) => b.type);
       const label = types.includes("jackpot") ? "JACKPOT!" : types.includes("3-rette") ? "3 RETTE" : "2 RETTE";
       showWinFlash(s.lastResult.winOre, label);
+    }
+    /* social results for THIS round, applied now (in sync with the draw, not at round start) */
+    if (pendingResults && pendingResults.round === roundId) {
+      setPlayers(pendingResults.players);
+      pushTicker(pendingResults.feed);
+      if (pendingResults.jackpot && !iWonJackpot) jackpotTakeover(pendingResults.jackpot.shareOre, "vunnet i runden!");
+      pendingResults = null;
     }
   } catch (e) { /* next state fetch heals */ }
 }
@@ -353,15 +460,21 @@ async function refreshState() {
   } catch (e) { /* */ }
 }
 
-joinButton.addEventListener("click", toggleBuy);
-newTicketsButton.addEventListener("click", newTickets);
-topupButton.addEventListener("click", topup);
+joinButton.addEventListener("click", () => { Sound.click(); toggleBuy(); });
+newTicketsButton.addEventListener("click", () => { Sound.click(); newTickets(); });
+topupButton.addEventListener("click", () => { Sound.click(); topup(); });
 document.querySelectorAll("[data-toggle]").forEach((btn) => {
-  btn.addEventListener("click", () => toggleTicket(Number(btn.dataset.toggle)));
+  btn.addEventListener("click", () => { Sound.click(); toggleTicket(Number(btn.dataset.toggle)); });
 });
 stakeOptsEl.addEventListener("click", (e) => {
   const btn = e.target.closest(".stake-opt");
-  if (btn && !btn.disabled) setStake(Number(btn.dataset.stake) * 100);
+  if (btn && !btn.disabled) { Sound.click(); setStake(Number(btn.dataset.stake) * 100); }
+});
+soundBtn.addEventListener("click", () => {
+  const m = Sound.toggle();
+  soundBtn.textContent = m ? "🔇" : "🔊";
+  soundBtn.classList.toggle("muted", m);
+  if (!m) Sound.click();
 });
 
 /* ---------- connection + countdown ---------- */
@@ -389,6 +502,7 @@ function updateCountdown() {
   const s = Math.ceil(ms / 1000);
   countdownEl.textContent = nextRoundAt ? `${s} s` : "–";
   stat.classList.toggle("soon", s <= 3 && ms > 0);
+  if (s !== lastCdSecond) { lastCdSecond = s; if (s >= 1 && s <= 3 && ms > 0) Sound.tick(); }
   const open = bettingOpen();
   if (open !== lastWindowOpen) { lastWindowOpen = open; updateControls(); }
 }
@@ -406,6 +520,7 @@ function connect() {
     nextRoundAt = Date.now() + d.msToNext;
     jackpots = d.jackpots;
     updateJackpotBoard();
+    setPlayers(d.players);
     setConn(true, "Tilkoblet");
     refreshState();
   });
@@ -414,11 +529,18 @@ function connect() {
     nextRoundAt = Date.now() + d.intervalMs;
     jackpots = d.jackpots;
     updateJackpotBoard();
+    setPlayers(d.players);
     setConn(true, "Tilkoblet");
     recentRounds.unshift([...d.numbers]);
     recentRounds = recentRounds.slice(0, 10);
     updateHotColdBoard();
     runRound(d.n, d.numbers);
+  });
+  source.addEventListener("players", (e) => { setPlayers(JSON.parse(e.data).players); });
+  source.addEventListener("results", (e) => {
+    // hold until the local draw finishes (finishRound) so we don't spoil the reveal
+    pendingResults = JSON.parse(e.data);
+    setPlayers(pendingResults.players);
   });
   source.onopen = () => setConn(true, "Tilkoblet");
   source.onerror = () => setConn(false, "Kobler til på nytt…");
@@ -439,6 +561,8 @@ async function boot() {
       const saldoLabel = playerBalanceEl.closest(".stat").querySelector(".k");
       if (saldoLabel) saldoLabel.textContent = "SALDO · DEMO";
     }
+    soundBtn.textContent = Sound.muted ? "🔇" : "🔊";
+    soundBtn.classList.toggle("muted", Sound.muted);
     renderTickets();
     renderMachineBalls();
     updatePlayerInfo();
