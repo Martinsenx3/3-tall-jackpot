@@ -39,6 +39,7 @@ const JACKPOT_TIERS = {
   high: { seedOre: 150_000, maxOre: 500_000, stakes: [800, 1600] },
 };
 const JACKPOT_INCREMENT_RATE = 0.02; // 2 % of stakes feed the pot
+const DAILY_BONUS_ORE = 10_000;      // demo-only daily bonus → 100 kr lekepenger
 const SESSION_TTL_MS = 2 * 60 * 60 * 1000;
 const KEEP_ROUNDS = 30;              // settled rounds kept in memory for /api/state
 
@@ -316,6 +317,7 @@ async function apiSession(req, res, body) {
       multipliers: { two: MULT_2, three: MULT_3, jackpot: MULT_JP },
       intervalMs: ROUND_INTERVAL,
       betCutoffMs: BET_CUTOFF_MS,
+      dailyBonusOre: wallet.mode === "mock" ? DAILY_BONUS_ORE : 0,
     },
     jackpots: publicJackpots(),
     round: { n: roundNumber, next: bettingRound(), msToNext: Math.max(0, nextRoundAt - Date.now()) },
@@ -328,6 +330,23 @@ async function apiNewTickets(req, res, body) {
   const upcoming = pendingBets.get(bettingRound());
   if (upcoming && upcoming.has(session.sid)) return fail(res, 409, "BET_ACTIVE", "Du har et aktivt kjøp — avbryt det først");
   session.tickets = makeTickets();
+  json(res, 200, { tickets: session.tickets });
+}
+
+// Lykketall: player picks the 3 payline (mid-row) numbers for one bong. Server validates.
+async function apiPickNumbers(req, res, body) {
+  const session = getSession(body.sessionId);
+  if (!session) return fail(res, 401, "NO_SESSION", "Ukjent sesjon");
+  const upcoming = pendingBets.get(bettingRound());
+  if (upcoming && upcoming.has(session.sid)) return fail(res, 409, "BET_ACTIVE", "Du har et aktivt kjøp — avbryt det først");
+  const bong = body.bong;
+  if (!Number.isInteger(bong) || bong < 0 || bong >= TICKETS_PER_SESSION) return fail(res, 400, "INVALID_BONG", "Ugyldig bong");
+  const nums = Array.isArray(body.numbers) ? body.numbers : [];
+  const uniq = [...new Set(nums)];
+  if (uniq.length !== 3 || uniq.some((n) => !Number.isInteger(n) || n < 1 || n > TOTAL_NUMBERS)) {
+    return fail(res, 400, "INVALID_NUMBERS", "Velg nøyaktig 3 ulike tall (1–20)");
+  }
+  session.tickets[bong] = { top: ticketRow(), mid: uniq.sort((a, b) => a - b), bottom: ticketRow() };
   json(res, 200, { tickets: session.tickets });
 }
 
@@ -469,6 +488,24 @@ async function apiTopup(req, res, body) {
   json(res, 200, { balanceOre: receipt.balanceAfter });
 }
 
+// Daily login bonus — demo only. Once-per-day is gated client-side (ephemeral demo
+// players); the per-session guard here just stops a single session from farming it.
+async function apiBonus(req, res, body) {
+  if (wallet.mode !== "mock") return fail(res, 403, "NOT_AVAILABLE", "Bonus finnes bare i demo-modus");
+  const session = getSession(body.sessionId);
+  if (!session) return fail(res, 401, "NO_SESSION", "Ukjent sesjon");
+  if (session.bonusClaimed) return fail(res, 409, "ALREADY_CLAIMED", "Bonus allerede hentet i denne sesjonen");
+  session.bonusClaimed = true;
+  const receipt = await wallet.credit({
+    playerId: session.playerId,
+    amountOre: DAILY_BONUS_ORE,
+    txId: `bonus-${crypto.randomUUID()}`,
+    meta: { reason: "daily-bonus" },
+  });
+  audit("daily_bonus", { playerId: session.playerId, amountOre: DAILY_BONUS_ORE });
+  json(res, 200, { balanceOre: receipt.balanceAfter, amountOre: DAILY_BONUS_ORE });
+}
+
 /* session pruning */
 setInterval(() => {
   const now = Date.now();
@@ -518,9 +555,11 @@ const server = http.createServer(async (req, res) => {
         const body = await readBody(req);
         if (p === "/api/session") return await apiSession(req, res, body);
         if (p === "/api/tickets") return await apiNewTickets(req, res, body);
+        if (p === "/api/tickets/pick") return await apiPickNumbers(req, res, body);
         if (p === "/api/bet") return await apiBet(req, res, body);
         if (p === "/api/bet/cancel") return await apiCancelBet(req, res, body);
         if (p === "/api/topup") return await apiTopup(req, res, body);
+        if (p === "/api/bonus") return await apiBonus(req, res, body);
       }
       if (req.method === "GET" && p === "/api/state") return await apiState(req, res, url.searchParams);
       return fail(res, 404, "NOT_FOUND", "Ukjent endepunkt");

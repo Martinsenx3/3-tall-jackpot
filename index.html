@@ -20,8 +20,9 @@
       <!-- CONNECTION + LIVE PLAYER COUNT -->
       <div class="conn" id="conn"><span class="conn-dot"></span><span id="connText">Kobler til…</span><span class="players" id="players" hidden>👥 <b id="playerCount">1</b></span></div>
 
-      <!-- TOP CONTROLS: sound + theme -->
+      <!-- TOP CONTROLS: sound + help + theme -->
       <button class="sound-btn" id="soundBtn" type="button" aria-label="Lyd av/på" title="Lyd">🔊</button>
+      <button class="help-btn" id="helpBtn" type="button" aria-label="Slik spiller du" title="Slik spiller du">?</button>
       <div class="themes" id="themeSwitcher" aria-label="Fargetema">
         <button class="theme-dot t-safir is-active" data-theme="safir" type="button" title="Safir" aria-label="Safir"></button>
         <button class="theme-dot t-obsidian" data-theme="obsidian" type="button" title="Obsidian" aria-label="Obsidian"></button>
@@ -150,6 +151,54 @@
           <span class="jp-title">JACKPOT!</span>
           <strong class="jp-amount" id="jpTakeoverAmount">0 KR</strong>
           <span class="jp-sub" id="jpTakeoverSub">vunnet nå</span>
+        </div>
+      </div>
+
+      <!-- LYKKETALL PICKER -->
+      <div class="modal" id="picker" hidden>
+        <div class="modal-card pick-card">
+          <button class="modal-x" id="pickClose" type="button" aria-label="Lukk">✕</button>
+          <div class="modal-title cinzel" id="pickTitle">Velg lykketall</div>
+          <p class="modal-lead">Velg <b>3 tall</b> for denne bongen. De avgjør gevinsten din — resten er pynt.</p>
+          <div class="pick-grid" id="pickGrid"></div>
+          <div class="pick-foot">
+            <div class="pick-count"><b id="pickCount">0</b> / 3 valgt</div>
+            <div class="pick-actions">
+              <button class="mbtn ghost" id="pickRandom" type="button">🎲 Lynlodd</button>
+              <button class="mbtn primary" id="pickConfirm" type="button" disabled>Bekreft</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ONBOARDING / SLIK SPILLER DU -->
+      <div class="modal" id="intro" hidden>
+        <div class="modal-card intro-card">
+          <button class="modal-x" id="introClose" type="button" aria-label="Lukk">✕</button>
+          <div class="modal-title cinzel"><span class="crown gold">♛</span> Slik spiller du 3-TALL</div>
+          <ol class="intro-steps">
+            <li><span class="istep">1</span><div><b>Velg innsats og bonger.</b> Inntil 4 bonger pr. runde. Trykk ✎ på en bong for å velge dine egne <b>lykketall</b> — eller la dem være tilfeldige.</div></li>
+            <li><span class="istep">2</span><div><b>Kjøp før trekningen.</b> En felles trekning starter automatisk — alle spillere får de samme tallene. Rekker du ikke, er neste i gang om sekunder.</div></li>
+            <li><span class="istep">3</span><div><b>4 tall trekkes av 20.</b> Bare <b>midtraden</b> på bongen teller. Jo flere av dine 3 tall som kommer, jo større gevinst.</div></li>
+          </ol>
+          <div class="intro-pay">
+            <div class="ipay"><span class="ipl">2 RETTE</span><span class="ipv gold">5× innsats</span><span class="ips">2 av tallene dine</span></div>
+            <div class="ipay"><span class="ipl">3 RETTE</span><span class="ipv gold">50× innsats</span><span class="ips">alle 3 på 4 trekk</span></div>
+            <div class="ipay jp"><span class="ipl">JACKPOT</span><span class="ipv gold">50× + pott</span><span class="ips">alle 3 på de 3 første</span></div>
+          </div>
+          <div class="modal-actions"><button class="mbtn primary big" id="introCta" type="button">Skjønner — la oss spille!</button></div>
+        </div>
+      </div>
+
+      <!-- DAILY BONUS (demo) -->
+      <div class="modal" id="bonus" hidden>
+        <div class="modal-card bonus-card">
+          <div class="bonus-rays"></div>
+          <span class="bonus-gift">🎁</span>
+          <div class="modal-title cinzel">Daglig bonus</div>
+          <p class="modal-lead">Velkommen tilbake! Her er <b class="gold" id="bonusAmount">100 KR</b> lekepenger på huset.</p>
+          <div class="streak" id="streak"></div>
+          <div class="modal-actions"><button class="mbtn primary big" id="bonusClaim" type="button">Hent bonus</button></div>
         </div>
       </div>
 

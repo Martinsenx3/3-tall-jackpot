@@ -24,6 +24,7 @@ let mode = "mock";
 let config = { stakeOptionsOre: [200, 400, 800, 1600], multipliers: { two: 5, three: 50, jackpot: 50 }, intervalMs: 22000, betCutoffMs: 1500 };
 let myTickets = [];                 // [{top, mid, bottom} × 4] from the server
 let activeTickets = [true, true, true, true];
+let luckyBongs = [false, false, false, false]; // which bongs the player hand-picked (🍀)
 let stakeOre = 800;
 let balanceOre = 0;
 let jackpots = { low: 0, high: 0 };
@@ -212,6 +213,7 @@ function updateControls() {
   const locked = !!activeBet || participating || busy;
   newTicketsButton.disabled = locked;
   stakeOptsEl.querySelectorAll(".stake-opt").forEach((b) => { b.disabled = busy; });
+  document.querySelectorAll(".bong .head .pick").forEach((b) => { b.disabled = locked; });
 }
 
 /* ---------- hot / cold (visual, from broadcast numbers) ---------- */
@@ -231,11 +233,12 @@ function renderTickets() {
     const cells = document.getElementById(`cells-${index}`);
     let html = '<div class="payline"></div>';
     ticket.top.forEach((n) => { html += `<div class="cell dim">${n}</div>`; });
-    ticket.mid.forEach((n) => { html += `<div class="cell mid" data-n="${n}">${n}</div>`; });
+    ticket.mid.forEach((n) => { html += `<div class="cell mid${luckyBongs[index] ? " luck" : ""}" data-n="${n}">${n}</div>`; });
     ticket.bottom.forEach((n) => { html += `<div class="cell dim">${n}</div>`; });
     cells.innerHTML = html;
     const bong = document.querySelector(`.bong[data-bong="${index}"]`);
     bong.classList.toggle("inactive", !activeTickets[index]);
+    bong.classList.toggle("has-luck", luckyBongs[index]);
     const toggle = bong.querySelector(".x");
     toggle.textContent = activeTickets[index] ? "✕" : "+";
   });
@@ -419,6 +422,7 @@ async function newTickets() {
     const d = await post("/api/tickets", { sessionId });
     myTickets = d.tickets;
     activeTickets = [true, true, true, true];
+    luckyBongs = [false, false, false, false];
     renderTickets();
     clearTicketStates();
   } catch (e) { /* keep current */ }
@@ -476,6 +480,136 @@ soundBtn.addEventListener("click", () => {
   soundBtn.classList.toggle("muted", m);
   if (!m) Sound.click();
 });
+
+/* ============================================================
+   WAVE 3 — Lykketall picker · onboarding · daily bonus
+   ============================================================ */
+function openModal(el) { el.hidden = false; }
+function closeModal(el) { el.hidden = true; }
+function bongLocked() { return !!activeBet || participating || busy; }
+
+/* ---- Lykketall: pick your own 3 payline numbers per bong ---- */
+const pickerEl = document.getElementById("picker");
+const pickGridEl = document.getElementById("pickGrid");
+const pickCountEl = document.getElementById("pickCount");
+const pickConfirmEl = document.getElementById("pickConfirm");
+const pickTitleEl = document.getElementById("pickTitle");
+let pickBong = -1;
+let pickSel = [];
+
+document.querySelectorAll(".bong").forEach((bong) => {
+  const id = Number(bong.dataset.bong);
+  const head = bong.querySelector(".head");
+  const btn = document.createElement("button");
+  btn.className = "pick"; btn.type = "button"; btn.textContent = "✎";
+  btn.title = "Velg lykketall";
+  btn.setAttribute("aria-label", `Velg lykketall for bong ${id + 1}`);
+  head.insertBefore(btn, head.querySelector(".x"));
+  btn.addEventListener("click", () => { Sound.click(); openPicker(id); });
+});
+
+function openPicker(bong) {
+  if (bongLocked()) return;
+  pickBong = bong;
+  pickSel = [...((myTickets[bong] && myTickets[bong].mid) || [])];
+  pickTitleEl.textContent = `Bong ${bong + 1} — velg 3 lykketall`;
+  renderPickGrid();
+  openModal(pickerEl);
+}
+function renderPickGrid() {
+  let html = "";
+  for (let n = 1; n <= 20; n += 1) {
+    const sel = pickSel.includes(n);
+    const dis = !sel && pickSel.length >= 3;
+    html += `<button class="pick-num${sel ? " sel" : ""}" type="button" data-n="${n}"${dis ? " disabled" : ""}>${n}</button>`;
+  }
+  pickGridEl.innerHTML = html;
+  pickCountEl.textContent = String(pickSel.length);
+  pickConfirmEl.disabled = pickSel.length !== 3;
+}
+pickGridEl.addEventListener("click", (e) => {
+  const b = e.target.closest(".pick-num");
+  if (!b || b.disabled) return;
+  const n = Number(b.dataset.n);
+  if (pickSel.includes(n)) pickSel = pickSel.filter((x) => x !== n);
+  else if (pickSel.length < 3) pickSel.push(n);
+  Sound.click(); renderPickGrid();
+});
+document.getElementById("pickRandom").addEventListener("click", () => {
+  const pool = Array.from({ length: 20 }, (_, i) => i + 1);
+  pickSel = [];
+  while (pickSel.length < 3) pickSel.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+  Sound.click(); renderPickGrid();
+});
+pickConfirmEl.addEventListener("click", async () => {
+  if (pickSel.length !== 3 || pickBong < 0 || bongLocked()) return;
+  const bong = pickBong;
+  pickConfirmEl.disabled = true;
+  try {
+    const d = await post("/api/tickets/pick", { sessionId, bong, numbers: pickSel });
+    myTickets = d.tickets;
+    luckyBongs[bong] = true;
+    renderTickets(); clearTicketStates(); updatePlayerInfo();
+    Sound.land();
+    closeModal(pickerEl);
+  } catch (e) { pickConfirmEl.disabled = false; }
+});
+document.getElementById("pickClose").addEventListener("click", () => { Sound.click(); closeModal(pickerEl); });
+
+/* ---- onboarding: "Slik spiller du" ---- */
+const introEl = document.getElementById("intro");
+function closeIntro() { closeModal(introEl); try { localStorage.setItem("seenIntro", "1"); } catch (e) {} }
+document.getElementById("helpBtn").addEventListener("click", () => { Sound.click(); openModal(introEl); });
+document.getElementById("introClose").addEventListener("click", () => { Sound.click(); closeIntro(); });
+document.getElementById("introCta").addEventListener("click", () => { Sound.click(); closeIntro(); });
+function maybeShowIntro() {
+  let seen = false;
+  try { seen = localStorage.getItem("seenIntro") === "1"; } catch (e) {}
+  if (!seen) openModal(introEl);
+}
+
+/* ---- daily bonus (demo only) ---- */
+const bonusEl = document.getElementById("bonus");
+function dayKey() { const d = new Date(); return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`; }
+function yesterdayKey() { const d = new Date(Date.now() - 864e5); return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`; }
+function renderStreak(streak) {
+  const box = document.getElementById("streak");
+  let html = "";
+  for (let i = 0; i < 7; i += 1) {
+    const on = i < streak ? "on" : "";
+    const today = i === streak ? "today" : "";
+    html += `<div class="day ${on} ${today}">${i + 1}</div>`;
+  }
+  box.innerHTML = html;
+}
+function maybeShowBonus() {
+  if (mode !== "mock" || !config.dailyBonusOre) return;
+  let last = null, streak = 0;
+  try { last = localStorage.getItem("bonusDay"); streak = Number(localStorage.getItem("bonusStreak") || "0"); } catch (e) {}
+  if (last === dayKey()) return;                 // already claimed today
+  if (last !== yesterdayKey()) streak = 0;        // streak broken
+  document.getElementById("bonusAmount").textContent = formatKr(config.dailyBonusOre);
+  renderStreak(streak);
+  openModal(bonusEl);
+}
+document.getElementById("bonusClaim").addEventListener("click", async () => {
+  const btn = document.getElementById("bonusClaim");
+  btn.disabled = true;
+  try {
+    const d = await post("/api/bonus", { sessionId });
+    balanceOre = d.balanceOre;
+    let streak = 0;
+    try { streak = Number(localStorage.getItem("bonusStreak") || "0"); } catch (e) {}
+    if (localStorageGet("bonusDay") !== yesterdayKey()) streak = 0;
+    streak = Math.min(7, streak + 1);
+    try { localStorage.setItem("bonusDay", dayKey()); localStorage.setItem("bonusStreak", String(streak)); } catch (e) {}
+    updatePlayerInfo();
+    Sound.win2(); spawnConfetti(40, true);
+  } catch (e) { /* if already claimed, just close */ }
+  btn.disabled = false;
+  closeModal(bonusEl);
+});
+function localStorageGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
 
 /* ---------- connection + countdown ---------- */
 function setConn(isOnline, text) {
@@ -571,6 +705,8 @@ async function boot() {
     updateControls();
     startCountdown();
     connect();
+    maybeShowIntro();
+    if (introEl.hidden) maybeShowBonus();   // first-time players see the guide; returning players get the bonus
   } catch (e) {
     setConn(false, "Får ikke kontakt med spillserveren");
     setTimeout(boot, 4000);
