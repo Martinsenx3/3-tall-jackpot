@@ -10,6 +10,13 @@ integreres mot en operatørs lommebok og kundedatabase (ekte penger, under konse
 - Felles trekning hvert 22. sekund, kringkastet til alle over SSE. Spilleren
   kjøper hver runde manuelt (ingen autoplay), innsats 2/4/8/16 kr, to delte
   progressive jackpotter.
+- **Bevisbar rettferdig (commit–reveal):** hver trekning forhåndsforpliktes med
+  `sha256(serverSeed)` og avsløres etterpå, slik at klienten reberegner og
+  bekrefter tallene selv. Et tillitslag oppå CSPRNG-en (erstatter ikke
+  RNG-sertifisering). Se `GET /api/verify`.
+- **Ansvarlig spill:** taps-/spilletidsgrenser, reality-check, pause/selvutestenging,
+  RTP-merke, demo-vs-ekte-indikator, 18+/Hjelpelinjen-stripe og transaksjonshistorikk.
+  Spillet håndhever som UX-lag; operatøren er fasit (se INTEGRATION.md).
 
 ## Kjør
 

@@ -41,6 +41,20 @@ const JACKPOT_TIERS = {
 const JACKPOT_INCREMENT_RATE = 0.02; // 2 % of stakes feed the pot
 const DAILY_BONUS_ORE = 10_000;      // demo-only daily bonus → 100 kr lekepenger
 const SESSION_TTL_MS = 2 * 60 * 60 * 1000;
+
+/* ---------- responsible gaming (ansvarlig spill) ----------
+   In production the OPERATOR owns the player account, limits and the
+   self-exclusion register; authenticateSession returns the player's RG state
+   and the operator must refuse a launch token for an excluded/under-age player.
+   The game RESPECTS those limits + surfaces the UI. In mock mode a working demo
+   is implemented (session-scoped). See INTEGRATION.md. */
+const RTP_PCT = 70;                          // target RTP for the current paytable — RTP-verification + RNG cert by an accredited test house still PENDING (see INTEGRATION.md). Do NOT edit without re-verification.
+const AGE_LIMIT = 18;
+const JURISDICTION_ALLOWLIST = ["NO"];
+const REALITY_CHECK_MS_DEFAULT = 60 * 60 * 1000;   // remind the player every hour (operator-overridable)
+const RG_LIMIT_DEFAULTS = { dailyLossOre: 50_000, dailyDepositOre: null, sessionTimeMs: null }; // demo defaults
+const COOLOFF_PRESETS_MS = { "15m": 15 * 60 * 1000, "1t": 60 * 60 * 1000, "24t": 24 * 60 * 60 * 1000, "7d": 7 * 24 * 60 * 60 * 1000 };
+const HELP_LINE = { name: "Hjelpelinjen for spilleavhengige", phone: "800 800 40", url: "https://hjelpelinjen.no" };
 const KEEP_ROUNDS = 30;              // settled rounds kept in memory for /api/state
 
 const wallet = createWallet();
@@ -110,24 +124,110 @@ let roundNumber = 0;
 let nextRoundAt = Date.now() + ROUND_INTERVAL;
 
 function tierOf(stakeOre) { return stakeOre <= 400 ? "low" : "high"; }
+// UTC day bucket for the demo daily-loss limit. In production the operator's wallet is the
+// loss authority and its timezone/day-boundary definition wins.
+function dayKey(ts) { return new Date(ts).toISOString().slice(0, 10); }
+function rollLossDay(session, now) {
+  const k = dayKey(now);
+  if (session.rg && session.rg.lossDayKey !== k) { session.rg.lossDayKey = k; session.rg.lossSoFarOre = 0; session.rg.depositSoFarOre = 0; }
+}
+// Pure responsible-gaming check for a bet attempt → a {status,error,message,…} to reject, or null to
+// allow. NO side effects, so it is safe to call BEFORE the reservation/debit. Can only ever be MORE
+// restrictive than the operator wallet, never permit an over-limit debit.
+function rgBetReject(session, amountOre, now) {
+  const rg = session.rg;
+  if (!rg) return null;
+  const ex = rg.exclusion || {};
+  if (ex.status === "excluded") return { status: 403, error: "SELF_EXCLUDED", message: "Du har selvekskludert deg.", until: ex.until || null, helpLine: HELP_LINE };
+  if (ex.status === "cooloff" && ex.until && ex.until > now) return { status: 403, error: "COOLOFF_ACTIVE", message: "Du har en aktiv pause.", until: ex.until, helpLine: HELP_LINE };
+  if (rg.limits.sessionTimeMs != null && now - rg.startedAt >= rg.limits.sessionTimeMs) return { status: 403, error: "TIME_LIMIT_REACHED", message: "Du har nådd spilletidsgrensen for denne økten." };
+  rollLossDay(session, now);
+  if (rg.limits.dailyLossOre != null && rg.lossSoFarOre + amountOre > rg.limits.dailyLossOre) return { status: 403, error: "LOSS_LIMIT_REACHED", message: "Du har nådd tapsgrensen din for i dag." };
+  return null;
+}
 function bettingRound() { return roundNumber + 1; }
 function bettingOpen() { return Date.now() < nextRoundAt - BET_CUTOFF_MS; }
 function publicJackpots() { return { low: jackpotsOre.low, high: jackpotsOre.high }; }
 function touch(session) { session.lastSeen = Date.now(); }
 
+/* ============================================================
+   PROVABLY FAIR (commit–reveal) — a transparency layer ON TOP of the CSPRNG.
+   Each round gets serverSeed = crypto.randomBytes(32) (still CSPRNG-strong),
+   generated one round AHEAD so sha256(serverSeed) can be published BEFORE
+   betting closes. The draw is DERIVED deterministically from the seed, so once
+   the seed is revealed anyone can recompute it and confirm it matches the
+   pre-published commitment. This does NOT replace accredited test-house RNG
+   certification — it is an additional, verifiable trust layer.
+   ============================================================ */
+const FAIR_VERSION = 1;
+// Public rotating client seed. Pin via env for stable historical verification across restarts.
+const FAIR_CLIENT_SEED = process.env.FAIR_CLIENT_SEED || crypto.randomBytes(16).toString("hex");
+const sha256hex = (buf) => crypto.createHash("sha256").update(buf).digest("hex");
+function fairPublicInput(round) { return `${FAIR_VERSION}:${FAIR_CLIENT_SEED}:${round}`; }
+
+// Deterministic byte reader over the concatenation of HMAC-SHA256(serverSeed, `${publicInput}:${block}`)
+// for block = 0,1,2,… — reproducible in-browser with SubtleCrypto.
+function fairReader(serverSeedBuf, publicInput) {
+  let block = 0, buf = Buffer.alloc(0), pos = 0;
+  return {
+    u32() {
+      while (buf.length - pos < 4) {
+        const h = crypto.createHmac("sha256", serverSeedBuf).update(`${publicInput}:${block}`).digest();
+        block += 1;
+        buf = Buffer.concat([buf.subarray(pos), h]); pos = 0;
+      }
+      const w = buf.readUInt32BE(pos); pos += 4; return w;
+    },
+  };
+}
+// Unbiased partial Fisher-Yates → DRAWS_PER_ROUND distinct numbers in 1..TOTAL_NUMBERS (order significant).
+function deriveDraw(serverSeedHex, round) {
+  const reader = fairReader(Buffer.from(serverSeedHex, "hex"), fairPublicInput(round));
+  function below(n) { const limit = Math.floor(0x100000000 / n) * n; let w; do { w = reader.u32(); } while (w >= limit); return w % n; }
+  const a = Array.from({ length: TOTAL_NUMBERS }, (_, i) => i + 1);
+  const picks = [];
+  for (let i = a.length - 1; i > 0 && picks.length < DRAWS_PER_ROUND; i -= 1) {
+    const j = below(i + 1);
+    [a[i], a[j]] = [a[j], a[i]];
+    picks.push(a[i]);
+  }
+  return picks;
+}
+const seeds = new Map(); // roundId → { serverSeedHex, commitHex }
+function ensureSeed(roundId) {
+  let s = seeds.get(roundId);
+  if (!s) {
+    const buf = crypto.randomBytes(32);
+    s = { serverSeedHex: buf.toString("hex"), commitHex: sha256hex(buf) };
+    seeds.set(roundId, s);
+  }
+  return s;
+}
+function commitFor(roundId) { return ensureSeed(roundId).commitHex; }
+function fairReveal(roundId) {
+  const log = roundLog.get(roundId);
+  if (!log || !log.serverSeedHex) return null;
+  return { round: roundId, serverSeed: log.serverSeedHex, commit: log.commitHex };
+}
+ensureSeed(roundNumber + 1); // commit the first betting round before the first hello frame goes out
+
 /* ---------- round engine ---------- */
 async function runRound() {
   roundNumber += 1;
   const thisRound = roundNumber;
-  const numbers = drawNumbers();
+  // Provably-fair: draw is DERIVED from this round's pre-committed seed (synchronous —
+  // no await before settlement, so the 22s cadence and apiBet microtask-atomicity are intact).
+  const { serverSeedHex, commitHex } = ensureSeed(thisRound);
+  const numbers = deriveDraw(serverSeedHex, thisRound);
+  const nextCommit = commitFor(thisRound + 1); // commit the next betting round before this broadcast
   nextRoundAt = Date.now() + ROUND_INTERVAL;
   setTimeout(runRound, ROUND_INTERVAL);
-  roundLog.set(thisRound, { numbers, at: Date.now() });
+  roundLog.set(thisRound, { numbers, at: Date.now(), serverSeedHex, commitHex, clientSeed: FAIR_CLIENT_SEED, version: FAIR_VERSION });
 
   const bets = pendingBets.get(thisRound) || new Map();
   pendingBets.delete(thisRound);
   reservations.delete(thisRound);
-  audit("round", { round: thisRound, numbers, bets: bets.size });
+  audit("round", { round: thisRound, numbers, bets: bets.size, commit: commitHex, serverSeed: serverSeedHex });
 
   /* 1) pots grow from this round's stakes (per tier) */
   for (const bet of bets.values()) {
@@ -202,16 +302,39 @@ async function runRound() {
         enqueueWalletRetry("credit", { playerId: bet.playerId, amountOre: winOre, txId: `win-${bet.betId}`, meta: { round: thisRound, betId: bet.betId } });
       }
     }
+    /* Responsible-gaming accounting. Runs AFTER settlement and touches ONLY session.rg —
+       never the wallet — so it cannot perturb the idempotent money flow (no new await before
+       settlement). Accumulates in BOTH modes so the loss bar / reality-check / in-game loss cap
+       track real in-session activity: in operator mode it starts from the operator-provided
+       baseline (server-authoritative loss remains the operator wallet's, this is defence-in-depth).
+       lossSoFarOre is the DAILY floored loss (for the cap); netOre is the SESSION signed net. */
+    {
+      const sess = sessions.get(bet.sid);
+      if (sess && sess.rg) {
+        rollLossDay(sess, Date.now());
+        const stakeTotal = bet.stakeOre * bet.activeIdx.length;
+        sess.rg.lossSoFarOre = Math.max(0, sess.rg.lossSoFarOre + (stakeTotal - winOre));
+        sess.rg.netOre = (sess.rg.netOre || 0) + (winOre - stakeTotal);
+      }
+    }
     settledThis.set(bet.sid, { bet, winOre, breakdown, balanceAfter });
   }
   settled.set(thisRound, settledThis);
 
-  /* prune memory (include bet/reservation maps in case any slot ever leaked) */
-  for (const m of [settled, roundLog, pendingBets, reservations]) {
+  /* prune memory (include bet/reservation/seed maps in case any slot ever leaked).
+     seeds for thisRound+1 (the next betting round) survive — that key is far above the cutoff. */
+  for (const m of [settled, roundLog, pendingBets, reservations, seeds]) {
     for (const key of m.keys()) if (key < thisRound - KEEP_ROUNDS) m.delete(key);
   }
 
-  broadcast("round", { n: thisRound, numbers, intervalMs: ROUND_INTERVAL, jackpots: publicJackpots(), players: clients.size });
+  broadcast("round", {
+    n: thisRound, numbers, intervalMs: ROUND_INTERVAL, jackpots: publicJackpots(), players: clients.size,
+    fair: {
+      version: FAIR_VERSION, clientSeed: FAIR_CLIENT_SEED,
+      reveal: { round: thisRound, serverSeed: serverSeedHex, commit: commitHex },
+      commit: { round: thisRound + 1, commit: nextCommit },
+    },
+  });
 
   /* social: aggregate, anonymized results for the live ticker + shared jackpot FX */
   const totalWonOre = roundWinners.reduce((s, w) => s + w.amountOre, 0);
@@ -292,6 +415,40 @@ async function apiSession(req, res, body) {
   } catch (e) {
     return fail(res, 401, e.code || "AUTH_FAILED", e.message);
   }
+
+  /* Responsible-gaming launch gates — operator mode only, defence-in-depth on top of the
+     operator refusing the token. Fail CLOSED: if the operator omitted age/exclusion we block. */
+  const now = Date.now();
+  if (wallet.mode === "operator") {
+    const ex = (auth.rg && auth.rg.exclusion) || {};
+    if (!auth.rg || ex.status === undefined) {
+      audit("session_blocked", { playerId: auth.playerId, reason: "rg_missing" });
+      return fail(res, 403, "SELF_EXCLUDED", "Spillet kan ikke åpnes (manglende ansvarlig-spill-status).");
+    }
+    if (ex.status === "excluded" || (ex.status === "cooloff" && ex.until && ex.until > now)) {
+      audit("session_blocked", { playerId: auth.playerId, reason: "self_excluded", until: ex.until || null });
+      return json(res, 403, { error: "SELF_EXCLUDED", message: "Du har en aktiv pause/selvekskludering.", until: ex.until || null, helpLine: HELP_LINE });
+    }
+    if (auth.ageVerified !== true) {
+      audit("session_blocked", { playerId: auth.playerId, reason: "age" });
+      return json(res, 403, { error: "AGE_NOT_VERIFIED", message: `Spillet krever bekreftet alder (${AGE_LIMIT}+).`, helpLine: HELP_LINE });
+    }
+    // Fail CLOSED like the age/exclusion gates: an unknown jurisdiction is the most-uncertain
+    // case and must be blocked, not let through. Operator MUST populate jurisdiction.
+    if (!JURISDICTION_ALLOWLIST.includes(auth.jurisdiction)) {
+      audit("session_blocked", { playerId: auth.playerId, reason: "jurisdiction", jurisdiction: auth.jurisdiction || null });
+      return fail(res, 403, "JURISDICTION_BLOCKED", "Spillet er ikke tilgjengelig i din jurisdiksjon.");
+    }
+  }
+
+  const authRg = auth.rg || {};
+  const limits = {
+    dailyLossOre: authRg.limits ? authRg.limits.dailyLossOre ?? null : RG_LIMIT_DEFAULTS.dailyLossOre,
+    dailyDepositOre: authRg.limits ? authRg.limits.dailyDepositOre ?? null : RG_LIMIT_DEFAULTS.dailyDepositOre,
+    sessionTimeMs: authRg.limits ? authRg.limits.sessionTimeMs ?? null : RG_LIMIT_DEFAULTS.sessionTimeMs,
+  };
+  const realityCheckMs = authRg.realityCheckMs ?? REALITY_CHECK_MS_DEFAULT;
+
   const sid = crypto.randomUUID();
   const session = {
     sid,
@@ -299,7 +456,17 @@ async function apiSession(req, res, body) {
     displayName: auth.displayName,
     currency: auth.currency,
     tickets: makeTickets(),
-    lastSeen: Date.now(),
+    lastSeen: now,
+    rg: {
+      limits,
+      exclusion: { status: (authRg.exclusion && authRg.exclusion.status) || "none", until: (authRg.exclusion && authRg.exclusion.until) || null },
+      realityCheckMs,
+      startedAt: now,
+      lossDayKey: dayKey(now),
+      lossSoFarOre: authRg.lossSoFarOre || 0,      // operator-provided daily baseline in prod; 0 in mock
+      depositSoFarOre: authRg.depositSoFarOre || 0,
+      netOre: 0,                                   // signed session net (for the reality-check)
+    },
   };
   sessions.set(sid, session);
   audit("session_open", { sid, playerId: auth.playerId, mode: wallet.mode });
@@ -318,6 +485,24 @@ async function apiSession(req, res, body) {
       intervalMs: ROUND_INTERVAL,
       betCutoffMs: BET_CUTOFF_MS,
       dailyBonusOre: wallet.mode === "mock" ? DAILY_BONUS_ORE : 0,
+      rtpPct: RTP_PCT,
+      numbersTotal: TOTAL_NUMBERS,
+      drawsPerRound: DRAWS_PER_ROUND,
+      ticketsPerSession: TICKETS_PER_SESSION,
+      realityCheckMs,
+      limits,
+      helpLine: HELP_LINE,
+      ageLimit: AGE_LIMIT,
+      cooloffPresets: Object.keys(COOLOFF_PRESETS_MS),
+      rgEditable: wallet.mode === "mock",   // mock: player edits limits in-game; operator: read-only deep-link
+      licence: process.env.OPERATOR_LICENCE || "",
+    },
+    rg: { sessionStartedAt: session.rg.startedAt, lossSoFarOre: session.rg.lossSoFarOre, netOre: session.rg.netOre, limits, exclusion: session.rg.exclusion, realityCheckMs },
+    fair: {
+      version: FAIR_VERSION,
+      clientSeed: FAIR_CLIENT_SEED,
+      commit: { round: bettingRound(), commit: commitFor(bettingRound()) },
+      reveal: fairReveal(roundNumber),
     },
     jackpots: publicJackpots(),
     round: { n: roundNumber, next: bettingRound(), msToNext: Math.max(0, nextRoundAt - Date.now()) },
@@ -373,8 +558,17 @@ async function apiBet(req, res, body) {
     return fail(res, 409, "ALREADY_BET", "Du har allerede kjøpt denne runden");
   }
 
-  const betId = crypto.randomUUID();
+  /* Responsible-gaming gate — PURE, side-effect-free, runs BEFORE any reservation slot or
+     wallet.debit. A reject therefore never creates a transaction (no orphaned debit; the
+     bet enters neither pendingBets nor reservations → settled XOR refunded still holds). */
   const amountOre = stakeOre * active.length;
+  const rgReject = rgBetReject(session, amountOre, Date.now());
+  if (rgReject) {
+    audit("limit_reject", { playerId: session.playerId, reason: rgReject.error, stakeOre, bongs: active.length });
+    return json(res, rgReject.status, { error: rgReject.error, message: rgReject.message, until: rgReject.until || null, helpLine: rgReject.helpLine || null });
+  }
+
+  const betId = crypto.randomUUID();
 
   /* Reserve a NON-gradeable slot to block concurrent double-bets, but do NOT put
      the bet into pendingBets (the map runRound settles) until the debit succeeds
@@ -465,10 +659,16 @@ async function apiState(req, res, query) {
       break;
     }
   }
+  const now = Date.now();
+  if (session.rg) rollLossDay(session, now);
+  const rg = session.rg
+    ? { sessionStartedAt: session.rg.startedAt, sessionElapsedMs: now - session.rg.startedAt, lossSoFarOre: session.rg.lossSoFarOre, netOre: session.rg.netOre, limits: session.rg.limits, exclusion: session.rg.exclusion, realityCheckMs: session.rg.realityCheckMs }
+    : null;
   json(res, 200, {
     balanceOre,
     bet: activeBet ? { betId: activeBet.betId, roundId: activeBet.roundId, stakeOre: activeBet.stakeOre, active: activeBet.activeIdx } : null,
     lastResult,
+    rg,
     jackpots: publicJackpots(),
     round: { n: roundNumber, next: bettingRound(), msToNext: Math.max(0, nextRoundAt - Date.now()), bettingOpen: bettingOpen() },
   });
@@ -506,6 +706,91 @@ async function apiBonus(req, res, body) {
   json(res, 200, { balanceOre: receipt.balanceAfter, amountOre: DAILY_BONUS_ORE });
 }
 
+// Provably-fair verification — public, read-only. Returns the revealed seed + draw for an
+// ALREADY-DRAWN round (roundLog only holds settled rounds, so a pending seed is never exposed).
+async function apiVerify(req, res, params) {
+  const round = Number(params.get("round"));
+  if (!Number.isInteger(round) || round < 1) return fail(res, 400, "INVALID_ROUND", "Ugyldig runde");
+  const log = roundLog.get(round);
+  if (!log || !log.serverSeedHex) return fail(res, 404, "NO_ROUND", "Runden finnes ikke (eller er for gammel)");
+  json(res, 200, {
+    round,
+    version: log.version,
+    clientSeed: log.clientSeed,
+    publicInput: `${log.version}:${log.clientSeed}:${round}`,
+    serverSeed: log.serverSeedHex,
+    commit: log.commitHex,
+    numbers: log.numbers,
+    at: log.at,
+  });
+}
+
+// Transaction history — read-only re-projection of this session's settled bets. SESSION-SCOPED,
+// limited to the last KEEP_ROUNDS in memory; the operator account/statement is the system of record.
+async function apiHistory(req, res, params) {
+  const session = getSession(params.get("sessionId"));
+  if (!session) return fail(res, 401, "NO_SESSION", "Ukjent sesjon");
+  const limit = Math.max(1, Math.min(30, Number(params.get("limit")) || 20));
+  const items = [];
+  for (let r = roundNumber; r > roundNumber - KEEP_ROUNDS && r > 0 && items.length < limit; r -= 1) {
+    const roundSettled = settled.get(r);
+    const entry = roundSettled && roundSettled.get(session.sid);
+    if (!entry) continue;
+    const log = roundLog.get(r);
+    const betAmountOre = entry.bet.stakeOre * entry.bet.activeIdx.length;
+    items.push({
+      roundId: r,
+      at: log ? log.at : null,
+      drawn: log ? log.numbers : null,
+      stakeOre: entry.bet.stakeOre,
+      bongs: entry.bet.activeIdx.length,
+      betAmountOre,
+      winOre: entry.winOre,
+      netOre: entry.winOre - betAmountOre,
+      breakdown: entry.breakdown,
+    });
+  }
+  json(res, 200, { items, sessionId: session.sid, returnedThrough: roundNumber, keptRounds: KEEP_ROUNDS });
+}
+
+// Self-exclusion / cool-off ("ta en pause"). MOCK ONLY — in production the operator owns the
+// self-exclusion register and this returns 409 OPERATOR_MANAGED. No wallet calls; only flips the
+// session flag the apiBet/apiSession gates already read.
+async function apiCooloff(req, res, body) {
+  const session = getSession(body.sessionId);
+  if (!session) return fail(res, 401, "NO_SESSION", "Ukjent sesjon");
+  if (wallet.mode !== "mock") return fail(res, 409, "OPERATOR_MANAGED", "Pause/selvekskludering settes hos spilltilbyderen din.");
+  const preset = body.preset;
+  if (preset === "exclude") {
+    session.rg.exclusion = { status: "excluded", until: null };
+  } else if (COOLOFF_PRESETS_MS[preset]) {
+    session.rg.exclusion = { status: "cooloff", until: Date.now() + COOLOFF_PRESETS_MS[preset] };
+  } else {
+    return fail(res, 400, "INVALID_PRESET", "Ugyldig varighet");
+  }
+  audit("rg_cooloff_set", { playerId: session.playerId, preset, until: session.rg.exclusion.until });
+  json(res, 200, { exclusion: session.rg.exclusion, helpLine: HELP_LINE });
+}
+
+// Set responsible-gaming limits. MOCK ONLY — in production these are operator-owned.
+async function apiSetLimits(req, res, body) {
+  const session = getSession(body.sessionId);
+  if (!session) return fail(res, 401, "NO_SESSION", "Ukjent sesjon");
+  if (wallet.mode !== "mock") return fail(res, 409, "OPERATOR_MANAGED", "Grenser settes hos spilltilbyderen din.");
+  const fields = ["dailyLossOre", "dailyDepositOre", "sessionTimeMs"];
+  const next = { ...session.rg.limits };
+  for (const f of fields) {
+    if (!(f in body)) continue;
+    const v = body[f];
+    if (v === null) { next[f] = null; continue; }
+    if (!Number.isInteger(v) || v < 0) return fail(res, 400, "INVALID_LIMIT", `Ugyldig verdi for ${f}`);
+    next[f] = v;
+  }
+  session.rg.limits = next;
+  audit("rg_limit_set", { playerId: session.playerId, limits: next });
+  json(res, 200, { limits: next, lossSoFarOre: session.rg.lossSoFarOre });
+}
+
 /* session pruning */
 setInterval(() => {
   const now = Date.now();
@@ -538,6 +823,12 @@ const server = http.createServer(async (req, res) => {
       intervalMs: ROUND_INTERVAL,
       jackpots: publicJackpots(),
       players: clients.size + 1,
+      fair: {
+        version: FAIR_VERSION,
+        clientSeed: FAIR_CLIENT_SEED,
+        commit: { round: bettingRound(), commit: commitFor(bettingRound()) },
+        reveal: fairReveal(roundNumber),
+      },
     });
     clients.add(res);
     broadcastPlayers();
@@ -560,8 +851,12 @@ const server = http.createServer(async (req, res) => {
         if (p === "/api/bet/cancel") return await apiCancelBet(req, res, body);
         if (p === "/api/topup") return await apiTopup(req, res, body);
         if (p === "/api/bonus") return await apiBonus(req, res, body);
+        if (p === "/api/rg/cooloff") return await apiCooloff(req, res, body);
+        if (p === "/api/rg/limits") return await apiSetLimits(req, res, body);
       }
       if (req.method === "GET" && p === "/api/state") return await apiState(req, res, url.searchParams);
+      if (req.method === "GET" && p === "/api/verify") return await apiVerify(req, res, url.searchParams);
+      if (req.method === "GET" && p === "/api/history") return await apiHistory(req, res, url.searchParams);
       return fail(res, 404, "NOT_FOUND", "Ukjent endepunkt");
     } catch (e) {
       if (e.message === "TOO_LARGE") return fail(res, 413, "TOO_LARGE", "For stor forespørsel");

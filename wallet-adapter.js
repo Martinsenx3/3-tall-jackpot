@@ -38,10 +38,19 @@ class MockWallet {
   }
 
   async authenticateSession() {
-    // Demo mode: every session is a fresh demo player with 1 000 kr.
+    // Demo mode: every session is a fresh demo player with 1 000 kr, no real identity.
+    // The rg block mirrors the shape a real operator must return (limits/exclusion/age).
     const playerId = `demo-${crypto.randomBytes(6).toString("hex")}`;
     this.balances.set(playerId, 100_000);
-    return { playerId, displayName: "Demo-spiller", currency: "NOK" };
+    return {
+      playerId, displayName: "Demo-spiller", currency: "NOK",
+      ageVerified: true,            // implicit in demo — NOT real KYC/age verification
+      rg: {
+        limits: { dailyLossOre: 50_000, dailyDepositOre: null, sessionTimeMs: null },
+        exclusion: { status: "none", until: null },
+        realityCheckMs: 60 * 60 * 1000,
+      },
+    };
   }
 
   #requirePlayer(playerId) {
@@ -144,7 +153,28 @@ class OperatorWallet {
   async authenticateSession(launchToken) {
     if (!launchToken) throw new WalletError("AUTH_FAILED", "Mangler launch-token fra operatørens plattform");
     const d = await this.#post("/session/verify", { token: launchToken });
-    return { playerId: d.playerId, displayName: d.displayName, currency: d.currency || "NOK" };
+    // The operator's /session/verify MUST return the player's responsible-gaming state and
+    // MUST refuse the token for a hard self-excluded or under-age player. The game ALSO gates
+    // on these (defence-in-depth) and fails CLOSED if they are missing — see server apiSession.
+    return {
+      playerId: d.playerId,
+      displayName: d.displayName,
+      currency: d.currency || "NOK",
+      jurisdiction: d.jurisdiction,            // e.g. "NO"; checked against the allowlist
+      ageVerified: d.ageVerified,              // boolean — operator KYC result
+      rg: d.rg && {
+        limits: {
+          dailyLossOre: d.rg.limits ? d.rg.limits.dailyLossOre ?? null : null,
+          dailyDepositOre: d.rg.limits ? d.rg.limits.dailyDepositOre ?? null : null,
+          sessionTimeMs: d.rg.limits ? d.rg.limits.sessionTimeMs ?? null : null,
+        },
+        exclusion: { status: d.rg.exclusion ? d.rg.exclusion.status : undefined, until: d.rg.exclusion ? d.rg.exclusion.until ?? null : null },
+        realityCheckMs: d.rg.realityCheckMs ?? null,
+        // operator may report already-consumed daily totals so the cap is enforced cross-session
+        lossSoFarOre: d.rg.lossSoFarOre ?? 0,
+        depositSoFarOre: d.rg.depositSoFarOre ?? 0,
+      },
+    };
   }
 
   /* TODO map → operator's balance endpoint. Returns integer øre. */

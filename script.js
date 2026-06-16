@@ -77,6 +77,13 @@ let lastCdSecond = null;
 function formatKr(ore) {
   return `${new Intl.NumberFormat("nb-NO", { maximumFractionDigits: 0 }).format(Math.floor(ore / 100))} KR`;
 }
+function formatKrSigned(ore) { return `${ore < 0 ? "−" : "+"}${formatKr(Math.abs(ore))}`; }
+function fmtDuration(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  const pad = (n) => String(n).padStart(2, "0");
+  return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
+}
 function ballTone(n) { return BALL_TONES[(n - 1) % BALL_TONES.length]; }
 function activeIdx() { return activeTickets.map((on, i) => (on ? i : -1)).filter((i) => i >= 0); }
 function roundStakeOre() { return activeIdx().length * stakeOre; }
@@ -87,7 +94,7 @@ function getHitCount(mid, drawn) { return mid.filter((n) => drawn.includes(n)).l
 async function api(path, opts) {
   const res = await fetch(path, opts);
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) { const err = new Error(data.message || data.error || res.status); err.code = data.error; throw err; }
+  if (!res.ok) { const err = new Error(data.message || data.error || res.status); err.code = data.error; err.data = data; err.status = res.status; throw err; }
   return data;
 }
 const post = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -345,10 +352,13 @@ async function finishRound(roundId) {
     const s = await api(`/api/state?sessionId=${encodeURIComponent(sessionId)}`);
     balanceOre = s.balanceOre ?? balanceOre;
     jackpots = s.jackpots;
+    if (s.rg) { rgState = s.rg; renderRg(); }
     if (s.bet) activeBet = { betId: s.bet.betId, roundId: s.bet.roundId, stakeOre: s.bet.stakeOre, active: s.bet.active };
     updatePlayerInfo();
     updateJackpotBoard();
     updateControls();
+    /* provably-fair: now that the draw has fully animated, recompute it in-browser and flip the badge */
+    if (fair.lastReveal && fair.lastReveal.round === roundId) verifyRound(fair.lastReveal, recentRounds[0]);
     const iWonJackpot = wasParticipating && s.lastResult && s.lastResult.roundId === roundId
       && s.lastResult.breakdown.some((b) => b.type === "jackpot");
     if (wasParticipating && s.lastResult && s.lastResult.roundId === roundId && s.lastResult.winOre > 0) {
@@ -381,6 +391,13 @@ async function toggleBuy() {
       if (d.balanceOre !== null) balanceOre = d.balanceOre;
     }
   } catch (e) {
+    /* RG rejects moved NO money — just surface them. */
+    if (e.code === "SELF_EXCLUDED" || e.code === "COOLOFF_ACTIVE") {
+      showLock({ status: e.code === "SELF_EXCLUDED" ? "excluded" : "cooloff", until: e.data && e.data.until }, e.data && e.data.helpLine);
+    } else if (e.code === "LOSS_LIMIT_REACHED") { flashToast("Du har nådd tapsgrensen din for i dag.");
+    } else if (e.code === "TIME_LIMIT_REACHED") { flashToast("Du har nådd spilletidsgrensen.");
+    } else if (e.code === "STAKE_LIMIT") { flashToast("Innsatsen overstiger grensen din.");
+    }
     await refreshState();
   }
   busy = false;
@@ -611,6 +628,266 @@ document.getElementById("bonusClaim").addEventListener("click", async () => {
 });
 function localStorageGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
 
+/* ============================================================
+   WAVE 4 — trust · provably-fair verification · responsible gaming
+   ============================================================ */
+let fair = { version: 1, clientSeed: null, currentCommit: null, currentCommitRound: null, lastReveal: null, lastVerify: null };
+let sessionStartMs = Date.now();
+let rgState = null;                 // {limits, exclusion, lossSoFarOre, realityCheckMs, sessionStartedAt}
+let realityAckUntil = 0;           // elapsed-ms boundary already acknowledged by the player
+let locked = false;
+
+/* ---- provably-fair: byte-identical recompute of the server draw with SubtleCrypto ---- */
+const Fair = (() => {
+  const subtle = (typeof crypto !== "undefined" && crypto.subtle) ? crypto.subtle : null;
+  function hexToBytes(hex) { const a = new Uint8Array(hex.length / 2); for (let i = 0; i < a.length; i += 1) a[i] = parseInt(hex.substr(i * 2, 2), 16); return a; }
+  function toHex(buf) { return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join(""); }
+  async function sha256hex(bytes) { return toHex(await subtle.digest("SHA-256", bytes)); }
+  async function hmac(keyBytes, msgStr) {
+    const key = await subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    return new Uint8Array(await subtle.sign("HMAC", key, new TextEncoder().encode(msgStr)));
+  }
+  async function deriveDraw(serverSeedHex, round, clientSeed, version) {
+    const total = config.numbersTotal || 20, draws = config.drawsPerRound || 4;
+    const seed = hexToBytes(serverSeedHex);
+    const pi = `${version}:${clientSeed}:${round}`;
+    let block = 0, buf = new Uint8Array(0), pos = 0;
+    async function u32() {
+      while (buf.length - pos < 4) {
+        const h = await hmac(seed, `${pi}:${block}`); block += 1;
+        const merged = new Uint8Array((buf.length - pos) + h.length);
+        merged.set(buf.subarray(pos)); merged.set(h, buf.length - pos);
+        buf = merged; pos = 0;
+      }
+      const w = (buf[pos] * 0x1000000) + (buf[pos + 1] * 0x10000) + (buf[pos + 2] * 0x100) + buf[pos + 3]; pos += 4; return w >>> 0;
+    }
+    async function below(n) { const lim = Math.floor(0x100000000 / n) * n; let w; do { w = await u32(); } while (w >= lim); return w % n; }
+    const a = Array.from({ length: total }, (_, i) => i + 1); const picks = [];
+    for (let i = a.length - 1; i > 0 && picks.length < draws; i -= 1) { const j = await below(i + 1); [a[i], a[j]] = [a[j], a[i]]; picks.push(a[i]); }
+    return picks;
+  }
+  return { available: !!subtle, sha256hex, hexToBytes, deriveDraw };
+})();
+
+function storeFair(f) {
+  if (!f) return;
+  fair.version = f.version ?? fair.version;
+  if (f.clientSeed) fair.clientSeed = f.clientSeed;
+  if (f.commit) { fair.currentCommit = f.commit.commit; fair.currentCommitRound = f.commit.round; }
+  if (f.reveal) fair.lastReveal = f.reveal;
+}
+async function verifyRound(reveal, drawnNumbers) {
+  if (!Fair.available || !reveal) { fair.lastVerify = { ok: null, reason: "unavailable" }; renderFairBadge(); return; }
+  try {
+    const commitOk = (await Fair.sha256hex(Fair.hexToBytes(reveal.serverSeed))) === reveal.commit;
+    const recomputed = await Fair.deriveDraw(reveal.serverSeed, reveal.round, fair.clientSeed, fair.version);
+    const numbersOk = Array.isArray(drawnNumbers) && JSON.stringify(recomputed) === JSON.stringify(drawnNumbers);
+    fair.lastVerify = { ok: commitOk && numbersOk, round: reveal.round, commit: reveal.commit, serverSeed: reveal.serverSeed, recomputed, drawn: drawnNumbers, commitOk, numbersOk };
+  } catch (e) { fair.lastVerify = { ok: null, reason: "error" }; }
+  renderFairBadge();
+  renderFairPanel();
+}
+function renderFairBadge() {
+  const badge = document.getElementById("fairBadge");
+  if (!badge) return;
+  const v = fair.lastVerify;
+  badge.classList.remove("ok", "bad", "neutral");
+  if (!Fair.available) { badge.classList.add("neutral"); badge.querySelector(".fb-mark").textContent = "🔒"; badge.querySelector(".fb-txt").textContent = "Rettferdig"; return; }
+  if (v && v.ok === true) { badge.classList.add("ok"); badge.querySelector(".fb-mark").textContent = "✓"; badge.querySelector(".fb-txt").textContent = "Bevisbar rettferdig"; }
+  else if (v && v.ok === false) { badge.classList.add("bad"); badge.querySelector(".fb-mark").textContent = "✕"; badge.querySelector(".fb-txt").textContent = "Avvik!"; }
+  else { badge.classList.add("neutral"); badge.querySelector(".fb-mark").textContent = "🛡"; badge.querySelector(".fb-txt").textContent = "Rettferdig"; }
+}
+function renderFairPanel() {
+  const set = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+  set("fairClientSeed", fair.clientSeed || "—");
+  set("fairCommitRound", fair.currentCommitRound != null ? `#${fair.currentCommitRound}` : "—");
+  set("fairCommitHash", fair.currentCommit ? fair.currentCommit : "—");
+  const v = fair.lastVerify;
+  const resEl = document.getElementById("fairResult");
+  if (!resEl) return;
+  if (!Fair.available) { resEl.className = "fair-result neutral"; resEl.textContent = "Verifisering krever en sikker (HTTPS) tilkobling."; return; }
+  if (!v) { resEl.className = "fair-result neutral"; resEl.textContent = "Venter på første trekning…"; return; }
+  if (v.ok === true) { resEl.className = "fair-result ok"; resEl.innerHTML = `✓ Runde #${v.round} verifisert. Tallene <b>${(v.drawn || []).join(", ")}</b> stemmer med den forhåndspubliserte forpliktelsen.`; }
+  else if (v.ok === false) { resEl.className = "fair-result bad"; resEl.innerHTML = `✕ Avvik i runde #${v.round}! Reberegnet ${(v.recomputed || []).join(", ")} vs trukket ${(v.drawn || []).join(", ")} (commit ${v.commitOk ? "ok" : "feil"}).`; }
+  else { resEl.className = "fair-result neutral"; resEl.textContent = "Kunne ikke verifisere."; }
+}
+
+/* ---- trust chrome: mode badge, RTP, session timer ---- */
+function applyTrustConfig() {
+  const modeBadge = document.getElementById("modeBadge");
+  if (modeBadge) {
+    const demo = mode === "mock";
+    modeBadge.textContent = demo ? "DEMO · LEKEPENGER" : "EKTE PENGER";
+    modeBadge.classList.toggle("demo", demo);
+    modeBadge.classList.toggle("real", !demo);
+  }
+  const rtp = config.rtpPct || 70;
+  const setTxt = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
+  setTxt("rtpVal", `${rtp}%`);
+  setTxt("rtpInfoVal", `${rtp}%`);
+  setTxt("rtpOdds", `${config.drawsPerRound || 4} av ${config.numbersTotal || 20} tall trekkes`);
+  // help line + licence in the always-on strip
+  const help = config.helpLine || { name: "Hjelpelinjen", phone: "800 800 40", url: "https://hjelpelinjen.no" };
+  [["helpLink", `${help.name}: ${help.phone}`], ["rgHubHelp", `${help.name} ${help.phone}`]].forEach(([id, txt]) => {
+    const a = document.getElementById(id); if (a) { a.textContent = txt; a.href = help.url; }
+  });
+  document.querySelectorAll(".age-limit").forEach((el) => { el.textContent = `${config.ageLimit || 18}+`; });
+  const lic = document.getElementById("licenceText");
+  if (lic) lic.textContent = config.licence || (mode === "mock" ? "Demo — ingen ekte innsats" : "");
+}
+let sessTimer = null;
+function startSessionTimer() {
+  if (sessTimer) clearInterval(sessTimer);
+  const tick = () => {
+    const txt = fmtDuration(Date.now() - sessionStartMs);
+    const a = document.getElementById("sessTimer"); if (a) a.textContent = txt;
+    const b = document.getElementById("rgSessTime"); if (b) b.textContent = txt;
+  };
+  tick(); sessTimer = setInterval(tick, 1000);
+}
+
+/* ---- responsible-gaming hub + reality check ---- */
+function renderRg() {
+  if (!rgState) return;
+  const set = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
+  const loss = rgState.lossSoFarOre || 0;
+  const limit = rgState.limits ? rgState.limits.dailyLossOre : null;
+  set("rgLossText", limit != null ? `${formatKr(loss)} / ${formatKr(limit)}` : `${formatKr(loss)} (ingen grense)`);
+  const bar = document.getElementById("rgLossBar");
+  if (bar) { const pct = limit ? Math.min(100, Math.round((loss / limit) * 100)) : 0; bar.style.width = `${pct}%`; bar.classList.toggle("warn", limit && loss / limit >= 0.8); }
+  const li = document.getElementById("limitLossInput");
+  if (li && document.activeElement !== li) li.value = (rgState.limits && rgState.limits.dailyLossOre != null) ? Math.floor(rgState.limits.dailyLossOre / 100) : "";
+  const ti = document.getElementById("limitTimeInput");
+  if (ti && document.activeElement !== ti) ti.value = (rgState.limits && rgState.limits.sessionTimeMs != null) ? Math.floor(rgState.limits.sessionTimeMs / 60000) : "";
+}
+function maybeReality() {
+  if (!rgState || !rgState.realityCheckMs || locked) return;
+  if (isDrawing) return;
+  if (document.getElementById("reality") && !document.getElementById("reality").hidden) return;
+  // don't stack on top of another open modal
+  if ([...document.querySelectorAll(".modal")].some((m) => !m.hidden)) return;
+  const elapsed = Date.now() - sessionStartMs;
+  const dueBoundary = Math.floor(elapsed / rgState.realityCheckMs) * rgState.realityCheckMs;
+  if (dueBoundary <= 0 || dueBoundary <= realityAckUntil) return;
+  realityAckUntil = dueBoundary;
+  const set = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
+  set("realityTime", fmtDuration(elapsed));
+  const net = rgState.netOre || 0;   // true signed session net (server-accumulated, both modes)
+  const netEl = document.getElementById("realityNet");
+  if (netEl) { netEl.textContent = net === 0 ? "0 KR" : formatKrSigned(net); netEl.className = `reality-net ${net < 0 ? "loss" : net > 0 ? "win" : "even"}`; }
+  openModal(document.getElementById("reality"));
+}
+let realityTimer = null;
+function startRealityCheck() {
+  if (realityTimer) clearInterval(realityTimer);
+  realityTimer = setInterval(maybeReality, 5000);
+}
+
+async function loadHistory() {
+  const listEl = document.getElementById("histList");
+  if (listEl) listEl.innerHTML = '<div class="hist-empty">Laster…</div>';
+  try {
+    const d = await api(`/api/history?sessionId=${encodeURIComponent(sessionId)}&limit=20`);
+    renderHistory(d.items || []);
+  } catch (e) { if (listEl) listEl.innerHTML = '<div class="hist-empty">Kunne ikke hente historikk.</div>'; }
+}
+function renderHistory(items) {
+  const listEl = document.getElementById("histList");
+  if (!listEl) return;
+  if (!items.length) { listEl.innerHTML = '<div class="hist-empty">Ingen spill ennå denne økten.</div>'; return; }
+  let staked = 0, won = 0;
+  listEl.innerHTML = items.map((it) => {
+    staked += it.betAmountOre; won += it.winOre;
+    const balls = (it.drawn || []).map((n) => `<span class="hist-ball">${n}</span>`).join("");
+    const winCls = it.netOre > 0 ? "win" : it.netOre < 0 ? "loss" : "";
+    return `<div class="hist-row"><div class="hist-meta"><b>Runde #${it.roundId}</b><span>${it.bongs} bong · ${formatKr(it.stakeOre)}/bong</span></div>
+      <div class="hist-balls">${balls}</div>
+      <div class="hist-net ${winCls}">${formatKrSigned(it.netOre)}</div></div>`;
+  }).join("");
+  const set = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
+  set("rgStaked", formatKr(staked)); set("rgWon", formatKr(won));
+}
+
+/* ---- RG actions ---- */
+async function saveLimits() {
+  const lossKr = document.getElementById("limitLossInput").value;
+  const timeMin = document.getElementById("limitTimeInput").value;
+  const body = { sessionId };
+  body.dailyLossOre = lossKr === "" ? null : Math.max(0, Math.round(Number(lossKr))) * 100;
+  body.sessionTimeMs = timeMin === "" ? null : Math.max(0, Math.round(Number(timeMin))) * 60000;
+  const btn = document.getElementById("saveLimitsBtn"); if (btn) btn.disabled = true;
+  try {
+    const d = await post("/api/rg/limits", body);
+    if (rgState) rgState.limits = d.limits;
+    renderRg();
+    flashToast("Grenser lagret ✓");
+  } catch (e) { flashToast(e.code === "OPERATOR_MANAGED" ? "Grenser settes hos spilltilbyderen." : "Kunne ikke lagre."); }
+  if (btn) btn.disabled = false;
+}
+async function setCooloff(preset) {
+  try {
+    const d = await post("/api/rg/cooloff", { sessionId, preset });
+    rgState = rgState || {};
+    rgState.exclusion = d.exclusion;
+    try { localStorage.setItem("cooloffUntil", String(d.exclusion.until || (d.exclusion.status === "excluded" ? -1 : 0))); } catch (e) {}
+    showLock(d.exclusion, d.helpLine);
+  } catch (e) { flashToast(e.code === "OPERATOR_MANAGED" ? "Pause settes hos spilltilbyderen." : "Kunne ikke sette pause."); }
+}
+function showLock(exclusion, helpLine) {
+  locked = true;
+  const lock = document.getElementById("rgLock");
+  if (!lock) return;
+  document.querySelectorAll(".modal").forEach((m) => { if (m !== lock) m.hidden = true; });
+  const set = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
+  if (exclusion && exclusion.status === "cooloff" && exclusion.until) {
+    set("rgLockTitle", "Du tar en pause");
+    set("rgLockText", "Du har valgt en pause fra spillet.");
+    let lockTimer = null;
+    const upd = () => {
+      const left = exclusion.until - Date.now();
+      if (left <= 0) { if (lockTimer) clearInterval(lockTimer); locked = false; lock.hidden = true; location.reload(); return; }
+      set("rgLockUntil", `Pausen er over om ${fmtDuration(left)}`);
+    };
+    lockTimer = setInterval(upd, 1000); upd();   // assign before the synchronous upd() to avoid a TDZ ReferenceError on immediate expiry
+  } else {
+    set("rgLockTitle", exclusion && exclusion.status === "excluded" ? "Selvekskludert" : "Spillet er låst");
+    set("rgLockText", "Du har valgt å stenge tilgangen til spillet.");
+    set("rgLockUntil", "");
+  }
+  const help = helpLine || config.helpLine;
+  if (help) { const a = document.getElementById("rgLockHelp"); if (a) { a.textContent = `${help.name}: ${help.phone}`; a.href = help.url; } }
+  lock.hidden = false;
+  joinButton.disabled = true;
+}
+function flashToast(msg) {
+  let t = document.getElementById("toast");
+  if (!t) { t = document.createElement("div"); t.id = "toast"; t.className = "toast"; document.getElementById("canvas").appendChild(t); }
+  t.textContent = msg; t.classList.add("show");
+  clearTimeout(flashToast._t); flashToast._t = setTimeout(() => t.classList.remove("show"), 2600);
+}
+
+/* ---- wire modals + buttons ---- */
+function wireWave4() {
+  const open = (id) => openModal(document.getElementById(id));
+  const onClick = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener("click", fn); };
+  onClick("rtpBadge", () => { Sound.click(); open("rtpInfo"); });
+  onClick("rgBtn", () => { Sound.click(); renderRg(); open("rgHub"); });
+  onClick("fairBadge", () => { Sound.click(); renderFairPanel(); open("fairPanel"); });
+  onClick("histOpenBtn", () => { Sound.click(); open("history"); loadHistory(); });
+  onClick("rtpFairBtn", () => { Sound.click(); closeModal(document.getElementById("rtpInfo")); renderFairPanel(); open("fairPanel"); });
+  onClick("rgFairBtn", () => { Sound.click(); closeModal(document.getElementById("rgHub")); renderFairPanel(); open("fairPanel"); });
+  onClick("saveLimitsBtn", () => { Sound.click(); saveLimits(); });
+  onClick("realityPause", () => { Sound.click(); closeModal(document.getElementById("reality")); renderRg(); open("rgHub"); });
+  onClick("fairVerifyBtn", async () => {
+    Sound.click();
+    if (fair.lastReveal) await verifyRound(fair.lastReveal, recentRounds[0]);
+  });
+  document.querySelectorAll("[data-cooloff]").forEach((b) => b.addEventListener("click", () => { Sound.click(); setCooloff(b.dataset.cooloff); }));
+  document.querySelectorAll(".modal [data-close]").forEach((b) => b.addEventListener("click", () => { Sound.click(); closeModal(b.closest(".modal")); }));
+  renderFairBadge();
+}
+wireWave4();
+
 /* ---------- connection + countdown ---------- */
 function setConn(isOnline, text) {
   online = isOnline;
@@ -653,6 +930,8 @@ function connect() {
     const d = JSON.parse(e.data);
     nextRoundAt = Date.now() + d.msToNext;
     jackpots = d.jackpots;
+    storeFair(d.fair);
+    renderFairBadge();
     updateJackpotBoard();
     setPlayers(d.players);
     setConn(true, "Tilkoblet");
@@ -662,6 +941,7 @@ function connect() {
     const d = JSON.parse(e.data);
     nextRoundAt = Date.now() + d.intervalMs;
     jackpots = d.jackpots;
+    storeFair(d.fair);              // store reveal+next commit, but DON'T verify yet (would spoil the draw)
     updateJackpotBoard();
     setPlayers(d.players);
     setConn(true, "Tilkoblet");
@@ -691,6 +971,8 @@ async function boot() {
     myTickets = d.tickets;
     jackpots = d.jackpots;
     nextRoundAt = Date.now() + d.round.msToNext;
+    if (d.rg) { rgState = d.rg; sessionStartMs = d.rg.sessionStartedAt || Date.now(); }
+    storeFair(d.fair);
     if (mode === "mock") {
       const saldoLabel = playerBalanceEl.closest(".stat").querySelector(".k");
       if (saldoLabel) saldoLabel.textContent = "SALDO · DEMO";
@@ -699,15 +981,30 @@ async function boot() {
     soundBtn.classList.toggle("muted", Sound.muted);
     renderTickets();
     renderMachineBalls();
+    applyTrustConfig();
+    renderRg();
+    renderFairBadge();
     updatePlayerInfo();
     updateTierDisplays();
     updateJackpotBoard();
     updateControls();
     startCountdown();
+    startSessionTimer();
+    startRealityCheck();
     connect();
     maybeShowIntro();
     if (introEl.hidden) maybeShowBonus();   // first-time players see the guide; returning players get the bonus
   } catch (e) {
+    /* A responsible-gaming launch block is NOT a connection error — show the lock, don't retry into play. */
+    if (e.code === "SELF_EXCLUDED" || e.code === "COOLOFF_ACTIVE") {
+      showLock({ status: e.code === "SELF_EXCLUDED" ? "excluded" : "cooloff", until: e.data && e.data.until }, e.data && e.data.helpLine);
+      return;
+    }
+    if (e.code === "AGE_NOT_VERIFIED" || e.code === "JURISDICTION_BLOCKED") {
+      showLock({ status: "excluded" }, e.data && e.data.helpLine);
+      const t = document.getElementById("rgLockText"); if (t) t.textContent = e.message || "Spillet er ikke tilgjengelig.";
+      return;
+    }
     setConn(false, "Får ikke kontakt med spillserveren");
     setTimeout(boot, 4000);
   }

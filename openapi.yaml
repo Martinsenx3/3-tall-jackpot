@@ -48,9 +48,22 @@ paths:
                       multipliers: { type: object, properties: { two: { type: integer }, three: { type: integer }, jackpot: { type: integer } } }
                       intervalMs: { type: integer, example: 22000 }
                       betCutoffMs: { type: integer, example: 1500 }
+                      rtpPct: { type: integer, example: 70, description: "Mål-utbetalingsprosent (RTP-verifikasjon hos akkreditert testhus utestående — se INTEGRATION.md)" }
+                      numbersTotal: { type: integer, example: 20 }
+                      drawsPerRound: { type: integer, example: 4 }
+                      realityCheckMs: { type: integer, nullable: true }
+                      limits: { type: object, properties: { dailyLossOre: { type: integer, nullable: true }, dailyDepositOre: { type: integer, nullable: true }, sessionTimeMs: { type: integer, nullable: true } } }
+                      helpLine: { type: object, properties: { name: { type: string }, phone: { type: string }, url: { type: string } } }
+                      ageLimit: { type: integer, example: 18 }
+                      cooloffPresets: { type: array, items: { type: string }, example: ["15m", "1t", "24t", "7d"] }
+                      rgEditable: { type: boolean, description: true i mock (spiller setter grenser i spillet), false i operator }
+                      licence: { type: string }
+                  rg: { $ref: "#/components/schemas/RgState" }
+                  fair: { $ref: "#/components/schemas/Fair" }
                   jackpots: { $ref: "#/components/schemas/Jackpots" }
                   round: { $ref: "#/components/schemas/RoundInfo" }
         "401": { $ref: "#/components/responses/Error" }
+        "403": { description: "SELF_EXCLUDED / COOLOFF_ACTIVE / AGE_NOT_VERIFIED / JURISDICTION_BLOCKED (kun operator-modus)" }
   /api/tickets:
     post:
       summary: Generer nye bonger for sesjonen
@@ -87,7 +100,8 @@ paths:
                   balanceOre: { type: integer, nullable: true }
         "400": { description: INVALID_STAKE / INVALID_TICKETS }
         "402": { description: INSUFFICIENT_FUNDS }
-        "409": { description: WINDOW_CLOSED / ALREADY_BET }
+        "403": { description: "Ansvarlig spill: LOSS_LIMIT_REACHED / TIME_LIMIT_REACHED / COOLOFF_ACTIVE / SELF_EXCLUDED (ingen transaksjon opprettes)" }
+        "409": { description: WINDOW_CLOSED / ALREADY_BET / STAKE_LIMIT }
   /api/bet/cancel:
     post:
       summary: Avbryt kjøp (full refusjon) før vinduet stenger
@@ -142,8 +156,96 @@ paths:
                             bong: { type: integer }
                             type: { type: string, enum: [2-rette, 3-rette, jackpot] }
                             amountOre: { type: integer }
+                  rg: { $ref: "#/components/schemas/RgState" }
                   jackpots: { $ref: "#/components/schemas/Jackpots" }
                   round: { $ref: "#/components/schemas/RoundInfo" }
+  /api/verify:
+    get:
+      summary: Bevisbar rettferdig — avslørt frø + tall for en trukket runde
+      description: Offentlig, read-only. Returnerer kun ALLEREDE trukne runder (aldri et ventende frø). Klienten reberegner og bekrefter mot den forhåndspubliserte forpliktelsen.
+      parameters:
+        - { in: query, name: round, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  round: { type: integer }
+                  version: { type: integer }
+                  clientSeed: { type: string }
+                  publicInput: { type: string, description: "version:clientSeed:round — input til HMAC" }
+                  serverSeed: { type: string, description: Avslørt frø (hex) }
+                  commit: { type: string, description: sha256(serverSeed) publisert på forhånd }
+                  numbers: { type: array, items: { type: integer } }
+                  at: { type: integer, description: epoch ms }
+        "400": { description: INVALID_ROUND }
+        "404": { description: NO_ROUND (ukjent eller for gammel) }
+  /api/history:
+    get:
+      summary: Transaksjonshistorikk for sesjonen (read-only)
+      description: Projeksjon av oppgjorte runder for KALLENDE sesjon. Begrenset til siste KEEP_ROUNDS i minnet — operatørens kontoutskrift er fasit.
+      parameters:
+        - { in: query, name: sessionId, required: true, schema: { type: string } }
+        - { in: query, name: limit, required: false, schema: { type: integer, minimum: 1, maximum: 30 } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        roundId: { type: integer }
+                        at: { type: integer, nullable: true }
+                        drawn: { type: array, items: { type: integer }, nullable: true }
+                        stakeOre: { type: integer }
+                        bongs: { type: integer }
+                        betAmountOre: { type: integer }
+                        winOre: { type: integer }
+                        netOre: { type: integer }
+                  returnedThrough: { type: integer }
+                  keptRounds: { type: integer }
+        "401": { $ref: "#/components/responses/Error" }
+  /api/rg/cooloff:
+    post:
+      summary: Ta en pause / selvutesteng (KUN mock-modus)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sessionId, preset]
+              properties:
+                sessionId: { type: string }
+                preset: { type: string, enum: ["15m", "1t", "24t", "7d", "exclude"] }
+      responses:
+        "200": { description: "{exclusion, helpLine}" }
+        "400": { description: INVALID_PRESET }
+        "409": { description: OPERATOR_MANAGED — settes hos operatøren i operator-modus }
+  /api/rg/limits:
+    post:
+      summary: Sett ansvarlig-spill-grenser (KUN mock-modus)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sessionId]
+              properties:
+                sessionId: { type: string }
+                dailyLossOre: { type: integer, nullable: true, minimum: 0 }
+                dailyDepositOre: { type: integer, nullable: true, minimum: 0 }
+                sessionTimeMs: { type: integer, nullable: true, minimum: 0 }
+      responses:
+        "200": { description: "{limits, lossSoFarOre}" }
+        "400": { description: INVALID_LIMIT }
+        "409": { description: OPERATOR_MANAGED i operator-modus }
   /api/topup:
     post:
       summary: Demo-påfyll (KUN mock-modus)
@@ -151,12 +253,22 @@ paths:
       responses:
         "200": { description: Ny saldo }
         "403": { description: NOT_AVAILABLE i operator-modus }
+  /api/bonus:
+    post:
+      summary: Daglig bonus (KUN mock-modus)
+      requestBody: { $ref: "#/components/requestBodies/SessionOnly" }
+      responses:
+        "200": { description: "{balanceOre, amountOre}" }
+        "403": { description: NOT_AVAILABLE i operator-modus }
+        "409": { description: ALREADY_CLAIMED i denne sesjonen }
   /events:
     get:
       summary: SSE-strøm av den felles trekningen
       description: >
-        `event: hello` ved tilkobling {round, msToNext, intervalMs, jackpots};
-        `event: round` per trekning {n, numbers[4], intervalMs, jackpots}.
+        `event: hello` ved tilkobling {round, msToNext, intervalMs, jackpots, fair};
+        `event: round` per trekning {n, numbers[4], intervalMs, jackpots, fair};
+        `event: players` {players}; `event: results` (anonymisert vinnerfeed).
+        `fair` bærer forpliktelse for neste runde + avsløring av forrige (commit–reveal).
         Keepalive-ping hvert 20. sekund.
       responses:
         "200": { description: text/event-stream }
@@ -184,6 +296,31 @@ components:
         next: { type: integer, description: Runden kjøp gjelder }
         msToNext: { type: integer }
         bettingOpen: { type: boolean }
+    RgState:
+      type: object
+      nullable: true
+      description: Ansvarlig-spill-tilstand for sesjonen (operatøreid i produksjon)
+      properties:
+        sessionStartedAt: { type: integer, description: epoch ms }
+        sessionElapsedMs: { type: integer }
+        lossSoFarOre: { type: integer }
+        limits: { type: object, properties: { dailyLossOre: { type: integer, nullable: true }, dailyDepositOre: { type: integer, nullable: true }, sessionTimeMs: { type: integer, nullable: true } } }
+        exclusion: { type: object, properties: { status: { type: string, enum: [none, cooloff, excluded] }, until: { type: integer, nullable: true } } }
+        realityCheckMs: { type: integer, nullable: true }
+    Fair:
+      type: object
+      description: Bevisbar rettferdig (commit–reveal)
+      properties:
+        version: { type: integer }
+        clientSeed: { type: string }
+        commit: { type: object, properties: { round: { type: integer }, commit: { type: string, description: sha256(serverSeed) for neste runde } } }
+        reveal:
+          type: object
+          nullable: true
+          properties:
+            round: { type: integer }
+            serverSeed: { type: string }
+            commit: { type: string }
   responses:
     Error:
       description: Feil
