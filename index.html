@@ -50,6 +50,7 @@
             <div class="glowbg"></div>
             <div class="amount tnum"><span id="jackpotAmount">1 500</span><span class="kr">KR</span></div>
             <div class="sub">VINN PÅ 2 ELLER 3 TALL!</div>
+            <div class="jp-meter" title="Hvor nær potten er taket"><div class="jp-meter-fill" id="jpMeterFill"></div></div>
           </div>
         </div>
 
@@ -196,6 +197,21 @@
             <div class="ipay jp"><span class="ipl">JACKPOT</span><span class="ipv gold">50× + pott</span><span class="ips">alle 3 på de 3 første</span></div>
           </div>
           <div class="modal-actions"><button class="mbtn primary big" id="introCta" type="button">Skjønner — la oss spille!</button></div>
+        </div>
+      </div>
+
+      <!-- WIN RECAP CARD -->
+      <div class="modal" id="winRecap" hidden>
+        <div class="modal-card recap-card">
+          <button class="modal-x" type="button" data-close aria-label="Lukk">✕</button>
+          <div class="recap-burst" id="recapBurst">🎉</div>
+          <div class="recap-head cinzel" id="recapHead">Du vant!</div>
+          <div class="recap-total tnum gold" id="recapTotal">0 KR</div>
+          <div class="recap-rows" id="recapRows"></div>
+          <div class="modal-actions">
+            <button class="mbtn ghost" id="recapShare" type="button">Del 🎉</button>
+            <button class="mbtn primary" type="button" data-close>Fortsett å spille</button>
+          </div>
         </div>
       </div>
 

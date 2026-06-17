@@ -187,10 +187,48 @@ function updateTierDisplays() {
   tier3El.textContent = formatKr(config.multipliers.three * stakeOre);
   tierJpEl.textContent = `${formatKr(config.multipliers.jackpot * stakeOre)} +`;
 }
+let jpShown = null;          // kr currently displayed
+let jpShownTier = null;      // which tier is on screen
+let jpTween = null;
+const krFmt = (kr) => new Intl.NumberFormat("nb-NO", { maximumFractionDigits: 0 }).format(kr);
 function updateJackpotBoard() {
   const tier = tierOf(stakeOre);
-  jackpotAmountEl.textContent = new Intl.NumberFormat("nb-NO", { maximumFractionDigits: 0 }).format(Math.floor(jackpots[tier] / 100));
+  const targetKr = Math.floor(jackpots[tier] / 100);
   if (jackpotTierEl) jackpotTierEl.textContent = tier === "low" ? "2–4 KR" : "8–16 KR";
+  // fill meter toward the tier cap (a "living" pot that visibly climbs toward must-grow ceiling)
+  const max = config.jackpotMaxOre && config.jackpotMaxOre[tier];
+  const seed = (config.jackpotSeedOre && config.jackpotSeedOre[tier]) || 0;
+  const fill = document.getElementById("jpMeterFill");
+  if (fill && max && max > seed) {
+    const pct = Math.max(0, Math.min(100, ((jackpots[tier] - seed) / (max - seed)) * 100));
+    fill.style.width = `${pct}%`;
+    fill.classList.toggle("hot", pct >= 80);
+  }
+  if (tier !== jpShownTier || jpShown === null) {   // tier switch → snap, no count-up
+    jpShownTier = tier; jpShown = targetKr;
+    if (jpTween) { cancelAnimationFrame(jpTween); jpTween = null; }
+    jackpotAmountEl.textContent = krFmt(targetKr);
+    return;
+  }
+  if (targetKr === jpShown) return;
+  tweenJackpot(jpShown, targetKr, targetKr > jpShown);
+  jpShown = targetKr;
+}
+function tweenJackpot(from, to, grew) {
+  if (jpTween) cancelAnimationFrame(jpTween);
+  const dur = 900, t0 = performance.now();
+  const disp = jackpotAmountEl.closest(".display") || jackpotAmountEl;
+  if (grew) { disp.classList.remove("bump"); void disp.offsetWidth; disp.classList.add("bump"); }
+  const tickAt = [];
+  const frame = (now) => {
+    const k = Math.min(1, (now - t0) / dur);
+    const eased = 1 - Math.pow(1 - k, 3);
+    const v = Math.round(from + (to - from) * eased);
+    jackpotAmountEl.textContent = krFmt(v);
+    if (grew && Sound && k < 1) { const slot = Math.floor(k * 6); if (!tickAt[slot]) { tickAt[slot] = 1; Sound.tick(); } }
+    if (k < 1) jpTween = requestAnimationFrame(frame); else jpTween = null;
+  };
+  jpTween = requestAnimationFrame(frame);
 }
 function showWinFlash(amountOre, label) {
   if (label === "JACKPOT!") { jackpotTakeover(amountOre, "din gevinst!"); return; }
@@ -251,9 +289,74 @@ function renderTickets() {
   });
 }
 function clearTicketStates() {
-  document.querySelectorAll(".bong").forEach((b) => b.classList.remove("near-win"));
+  document.querySelectorAll(".bong").forEach((b) => { b.classList.remove("near-win", "payfire"); b.removeAttribute("data-hits"); });
   document.querySelectorAll(".cell").forEach((c) => c.classList.remove("hit", "fresh", "miss"));
+  document.querySelectorAll(".payline").forEach((p) => p.classList.remove("sweep"));
+  hideNearBanner();
 }
+/* payline laser: light the mid-row progressively as a bong's hits accumulate */
+function paintPaylines(idxs, drawn) {
+  idxs.forEach((id) => {
+    const bong = document.querySelector(`.bong[data-bong="${id}"]`);
+    if (!bong) return;
+    const hits = getHitCount(myTickets[id].mid, drawn);
+    bong.dataset.hits = String(hits);
+    if (hits >= 2) bong.classList.add("payfire");
+    const pl = bong.querySelector(".payline");
+    if (pl) { pl.classList.remove("sweep"); void pl.offsetWidth; pl.classList.add("sweep"); } // retrigger the sweep each hit
+  });
+}
+function showNearBanner(text) {
+  let b = document.getElementById("nearBanner");
+  if (!b) { b = document.createElement("div"); b.id = "nearBanner"; b.className = "near-banner"; document.getElementById("canvas").appendChild(b); }
+  b.textContent = text;
+  b.classList.add("show");
+}
+function hideNearBanner() { const b = document.getElementById("nearBanner"); if (b) b.classList.remove("show"); }
+
+/* win recap card (item 8) */
+let lastWinShare = 0;
+function bongLabel(t) { return t === "jackpot" ? "JACKPOT" : t === "3-rette" ? "3 rette" : "2 rette"; }
+function showWinRecap(result) {
+  if (!result || !(result.winOre > 0) || !Array.isArray(result.breakdown)) return;
+  lastWinShare = result.winOre;
+  const isJp = result.breakdown.some((b) => b.type === "jackpot");
+  const is3 = result.breakdown.some((b) => b.type === "3-rette");
+  document.getElementById("recapHead").textContent = isJp ? "JACKPOT!" : is3 ? "3 RETTE!" : "Gevinst!";
+  document.getElementById("recapBurst").textContent = isJp ? "👑" : "🎉";
+  document.getElementById("recapTotal").textContent = formatKr(result.winOre);
+  document.getElementById("recapRows").innerHTML = result.breakdown
+    .slice().sort((a, b) => b.amountOre - a.amountOre)
+    .map((b) => `<div class="recap-row"><span>Bong ${Number(b.bong) + 1} · ${bongLabel(b.type)}</span><b class="gold">${formatKrSigned(b.amountOre)}</b></div>`)
+    .join("");
+  openModal(document.getElementById("winRecap"));
+}
+(function wireRecapShare() {
+  const btn = document.getElementById("recapShare");
+  if (!btn) return;
+  btn.addEventListener("click", async () => {
+    Sound.click();
+    const txt = `Jeg vant ${formatKr(lastWinShare)} på 3-TALL Jackpot! 🎉`;
+    try {
+      if (navigator.share) await navigator.share({ text: txt });
+      else if (navigator.clipboard) { await navigator.clipboard.writeText(txt); flashToast("Kopiert ✓"); }
+    } catch (e) { /* user dismissed share sheet */ }
+  });
+})();
+
+/* subtle pointer parallax on the centrepieces (desktop, respects reduced-motion) */
+(function parallax() {
+  if (window.matchMedia && (window.matchMedia("(max-width: 820px)").matches || window.matchMedia("(prefers-reduced-motion: reduce)").matches)) return;
+  const layers = [[document.querySelector(".jackpot"), 10], [document.querySelector(".machine"), 16]];
+  let raf = null, mx = 0, my = 0;
+  window.addEventListener("mousemove", (e) => {
+    mx = (e.clientX / window.innerWidth - 0.5); my = (e.clientY / window.innerHeight - 0.5);
+    if (!raf) raf = requestAnimationFrame(() => {
+      raf = null;
+      layers.forEach(([el, d]) => { if (el) el.style.transform = `translate(${(-mx * d).toFixed(1)}px, ${(-my * d).toFixed(1)}px)`; });
+    });
+  }, { passive: true });
+})();
 function renderMachineBalls() {
   machineBallsEl.innerHTML = MACHINE_BALL_POS.map((p, i) => {
     return `<div class="ball ${BALL_TONES[i % BALL_TONES.length]}" style="left:${p[0]}%;bottom:${p[1]}%;animation-delay:${p[2]}s"></div>`;
@@ -308,6 +411,7 @@ function runRound(roundId, numbers) {
   let i = 0;
   let tenseNext = false;
   function step() {
+    hideNearBanner();
     const n = numbers[i];
     revealEl.className = `reveal ${ballTone(n)}${tenseNext ? " tense" : ""}`;
     revealEl.innerHTML = `<span class="face">${n}</span>`;
@@ -323,12 +427,13 @@ function runRound(roundId, numbers) {
         drawn.push(n);
         addDrawnBall(n);
         Sound.land();
-        if (participating) { markHits(n, idxs); updateNearWin(drawn, idxs); }
+        if (participating) { markHits(n, idxs); updateNearWin(drawn, idxs); paintPaylines(idxs, drawn); }
         i += 1;
         const near = participating && i < numbers.length && idxs.some((id) => getHitCount(myTickets[id].mid, drawn) === 2);
         tenseNext = near;
         machineEl.classList.toggle("tense", near);
-        if (near) Sound.heartbeat();
+        if (near) { Sound.heartbeat(); showNearBanner(i === 2 ? "1 tall unna JACKPOT! 👑" : "1 tall unna 3 RETTE!"); }
+        else hideNearBanner();
         if (i < numbers.length) {
           drawTimer = setTimeout(step, near ? SUSPENSE_MS : BETWEEN_MS);
         } else {
@@ -365,6 +470,8 @@ async function finishRound(roundId) {
       const types = s.lastResult.breakdown.map((b) => b.type);
       const label = types.includes("jackpot") ? "JACKPOT!" : types.includes("3-rette") ? "3 RETTE" : "2 RETTE";
       showWinFlash(s.lastResult.winOre, label);
+      const result = s.lastResult;
+      setTimeout(() => showWinRecap(result), 1600);   // recap card after the flash settles
     }
     /* social results for THIS round, applied now (in sync with the draw, not at round start) */
     if (pendingResults && pendingResults.round === roundId) {

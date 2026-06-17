@@ -496,6 +496,8 @@ async function apiSession(req, res, body) {
       cooloffPresets: Object.keys(COOLOFF_PRESETS_MS),
       rgEditable: wallet.mode === "mock",   // mock: player edits limits in-game; operator: read-only deep-link
       licence: process.env.OPERATOR_LICENCE || "",
+      jackpotSeedOre: { low: JACKPOT_TIERS.low.seedOre, high: JACKPOT_TIERS.high.seedOre },
+      jackpotMaxOre: { low: JACKPOT_TIERS.low.maxOre, high: JACKPOT_TIERS.high.maxOre },
     },
     rg: { sessionStartedAt: session.rg.startedAt, lossSoFarOre: session.rg.lossSoFarOre, netOre: session.rg.netOre, limits, exclusion: session.rg.exclusion, realityCheckMs },
     fair: {
