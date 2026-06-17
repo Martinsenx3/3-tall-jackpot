@@ -833,22 +833,27 @@ body.no-sparkle #sparkles{display:none}
    WAVE 5 — economy: Gullbong (×2) telegraph · Bonusball
    ============================================================ */
 .bong{position:relative}
-/* gullbong = UNMISTAKABLY marked: thick gold ring + strong glow + a SOLID gold header bar +
-   a gold wash over the whole bong + a one-time shine sweep (all INSIDE the bong, which is
-   overflow:hidden). No looping animation — nothing blinks. */
-.bong.gullbong{filter:drop-shadow(0 0 26px rgba(255,200,80,.8))}
+/* gullbong = UNMISTAKABLY marked + LIFTED forward: the whole bong scales up and rises above the
+   others (z-index + depth shadow), a thick gold ring + glow + solid gold header + a big ×2 badge.
+   All static after a one-time fade-in — nothing blinks. */
+.bong.gullbong{transform:scale(1.045);z-index:9;transition:transform .3s cubic-bezier(.16,1,.3,1);
+  filter:drop-shadow(0 0 26px rgba(255,200,80,.85)) drop-shadow(0 18px 24px rgba(0,0,0,.6))}
 .bong.gullbong .cells{background:radial-gradient(130% 100% at 50% 0%, rgba(255,200,80,.18), transparent 72%)}
 .bong.gullbong::after{content:"";position:absolute;inset:0;border-radius:16px;pointer-events:none;z-index:6;
   border:4px solid var(--gold-1);box-shadow:inset 0 0 26px rgba(255,200,80,.5),0 0 4px var(--gold-1);animation:gullin .45s ease-out}
 @keyframes gullin{0%{opacity:0}100%{opacity:1}}
-/* one-time diagonal shine sweep when the gullbong appears */
-.bong.gullbong::before{content:"";position:absolute;inset:0;z-index:5;pointer-events:none;
-  background:linear-gradient(115deg,transparent 32%,rgba(255,255,255,.55) 50%,transparent 68%);
-  transform:translateX(-110%);animation:gullshine 1s ease-out .12s 1 both}
-@keyframes gullshine{to{transform:translateX(110%)}}
+/* big ×2 multiplier badge (real element so it doesn't collide with .frame's ::before border).
+   Top-right, over the decorative top row — never the payline (middle) numbers. */
+.gull-x2{position:absolute;top:48px;right:12px;z-index:8;
+  width:58px;height:58px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  font-family:'Cinzel',serif;font-weight:800;font-size:28px;color:#2a1c05;pointer-events:none;
+  background:radial-gradient(circle at 38% 30%,var(--gold-hi),var(--gold-2) 55%,var(--gold-3));
+  box-shadow:0 6px 16px rgba(0,0,0,.6),inset 0 1px 0 rgba(255,255,255,.6),0 0 0 3px rgba(255,255,255,.25);
+  animation:gullpop .5s cubic-bezier(.16,1,.3,1)}
+@keyframes gullpop{0%{transform:scale(0);opacity:0}60%{transform:scale(1.15)}100%{transform:scale(1);opacity:1}}
 .bong.gullbong .head{background:linear-gradient(180deg,var(--gold-hi),var(--gold-1) 45%,var(--gold-3));border-bottom:2px solid var(--gold-deep)}
 .bong.gullbong .head .nm{color:#2a1c05;text-shadow:none}
-.bong.gullbong .head .nm::after{content:" · ★ GULLBONG ×2";color:#2a1c05;font-weight:800;letter-spacing:.04em}
+.bong.gullbong .head .nm::after{content:" · ★ GULLBONG";color:#2a1c05;font-weight:800;letter-spacing:.04em}
 .bong.gullbong .head .x,.bong.gullbong .head .pick{background:rgba(0,0,0,.28);border-color:rgba(0,0,0,.35);color:#2a1c05}
 
 /* the gold bonus ball */

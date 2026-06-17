@@ -291,6 +291,7 @@ function renderTickets() {
 }
 function clearTicketStates() {
   document.querySelectorAll(".bong").forEach((b) => { b.classList.remove("near-win", "payfire", "gullbong"); b.removeAttribute("data-hits"); });
+  document.querySelectorAll(".gull-x2").forEach((e) => e.remove());
   document.querySelectorAll(".cell").forEach((c) => c.classList.remove("hit", "fresh", "miss", "bonushit"));
   document.querySelectorAll(".payline").forEach((p) => p.classList.remove("sweep"));
   hideNearBanner();
@@ -415,7 +416,10 @@ function runRound(roundId, numbers) {
   // ONLY bong where settlement can pay the ×2 (server: idx === gullbongSlot AND idx ∈ activeIdx)
   if (participating && roundExtras && roundExtras.gullbongSlot >= 0 && idxs.includes(roundExtras.gullbongSlot)) {
     const gb = document.querySelector(`.bong[data-bong="${roundExtras.gullbongSlot}"]`);
-    if (gb) gb.classList.add("gullbong");
+    if (gb) {
+      gb.classList.add("gullbong");
+      if (!gb.querySelector(".gull-x2")) { const x2 = document.createElement("div"); x2.className = "gull-x2"; x2.textContent = `×${roundExtras.gullMult || 2}`; gb.appendChild(x2); }
+    }
     showNearBanner(`⭐ GULLBONG — Bong ${roundExtras.gullbongSlot + 1} gir ×${roundExtras.gullMult || 2}!`);
     setTimeout(hideNearBanner, 2400);   // dismissed by its own timer; step() won't wipe it on the first ball (i===0)
   }
