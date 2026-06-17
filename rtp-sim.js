@@ -13,7 +13,7 @@
 
 const TOTAL = 20, DRAWS = 4, BONGS = 4;
 const MULT_2 = 5, MULT_3 = 50, MULT_JP = 50;
-const GULLBONG_MULT = 2, GULLBONG_FREQ = 0.25, BONUS_PCT = 50;
+const GULLBONG_MULT = 2, GULLBONG_FREQ = 0.25, BONUS_PCT = 50, BONUSBALL_FREQ = 0.2;
 
 function sample(k, pool) {
   const a = Array.from({ length: pool }, (_, i) => i + 1);
@@ -25,7 +25,8 @@ function trial(useBoost) {
   const draw = sample(DRAWS, TOTAL), first3 = draw.slice(0, 3);
   const gullActive = useBoost && Math.random() < GULLBONG_FREQ;
   const gullSlot = Math.floor(Math.random() * BONGS);
-  const bonus = useBoost ? (Math.floor(Math.random() * TOTAL) + 1) : null;
+  const bonusActive = useBoost && Math.random() < BONUSBALL_FREQ;
+  const bonus = bonusActive ? (Math.floor(Math.random() * TOTAL) + 1) : null;
   const stake = 1; let payout = 0, totalStake = 0;
   for (let b = 0; b < BONGS; b += 1) {
     totalStake += stake;
@@ -52,4 +53,4 @@ const base = rtp(false, N), boosted = rtp(true, N);
 console.log(`3-TALL fixed-prize RTP over ${N.toLocaleString("en")} trials (progressive pot share excluded, ~+2 pp on top):`);
 console.log(`  BASE (no boosts):        ${(base * 100).toFixed(2)} %`);
 console.log(`  WITH Gullbong + Bonus:   ${(boosted * 100).toFixed(2)} %  (+${((boosted - base) * 100).toFixed(2)} pp)`);
-console.log(`  config: Gullbong ×${GULLBONG_MULT} @ ${GULLBONG_FREQ * 100}% of rounds · Bonus +${BONUS_PCT}%`);
+console.log(`  config: Gullbong ×${GULLBONG_MULT} @ ${GULLBONG_FREQ * 100}% of rounds · Bonus +${BONUS_PCT}% @ ${BONUSBALL_FREQ * 100}% of rounds`);

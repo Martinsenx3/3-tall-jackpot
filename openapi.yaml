@@ -59,6 +59,7 @@ paths:
                       rgEditable: { type: boolean, description: true i mock (spiller setter grenser i spillet), false i operator }
                       licence: { type: string }
                       gullbong: { type: object, properties: { enabled: { type: boolean }, mult: { type: integer, example: 2 }, freq: { type: number, example: 0.25, description: andel av rundene som er gullbong-runder } } }
+                      bonusBall: { type: object, properties: { enabled: { type: boolean }, pct: { type: integer, example: 50 }, freq: { type: number, example: 0.2, description: andel av rundene med bonusball } } }
                       bonusBall: { type: object, properties: { enabled: { type: boolean }, pct: { type: integer, example: 50 } } }
                   rg: { $ref: "#/components/schemas/RgState" }
                   fair: { $ref: "#/components/schemas/Fair" }
@@ -189,8 +190,11 @@ paths:
                       gullbongSlot: { type: integer, description: "Gullbong-plass 0..3, eller -1 (inaktiv runde)" }
                       gullRoll: { type: integer, description: "Rå u32 fra frøet; gullActive = gullRoll/2^32 < gullbongFreq" }
                       gullSlot: { type: integer, description: "Rå plass 0..3 (uavhengig av aktiv/inaktiv)" }
-                      gullbongFreq: { type: number, description: "Aktiverings-terskel (0..1), del av fairness-kontrakten" }
-                      bonusBall: { type: integer, description: Gyllen bonusball 1..20 }
+                      gullbongFreq: { type: number, description: "Gullbong-aktiveringsterskel (0..1)" }
+                      bonusBall: { type: integer, nullable: true, description: "Bonusball 1..20, eller null (ikke en bonusrunde)" }
+                      bonusRoll: { type: integer, description: "Rå u32; bonusActive = bonusRoll/2^32 < bonusFreq" }
+                      bonusBallRaw: { type: integer, description: "Rå bonustall 1..20 (uavhengig av aktiv/inaktiv)" }
+                      bonusFreq: { type: number, description: "Bonusball-aktiveringsterskel (0..1)" }
                   at: { type: integer, description: epoch ms }
         "400": { description: INVALID_ROUND }
         "404": { description: NO_ROUND (ukjent eller for gammel) }

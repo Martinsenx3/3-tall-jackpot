@@ -45,6 +45,7 @@ const GULLBONG_ENABLED = true;
 const GULLBONG_MULT = 2;             // a winning gullbong pays ×2 on its multiplier part
 const GULLBONG_FREQ = 0.25;          // ~1 in 4 rounds is a (telegraphed) gullbong round
 const BONUSBALL_ENABLED = true;
+const BONUSBALL_FREQ = 0.2;          // ~1 in 5 rounds is a (special) bonusball round — NOT every round
 const BONUS_PCT = 50;                // +50 % to a winning bong whose payline contains the bonus number
 const JACKPOT_TIERS = {
   low:  { seedOre: 25_000,  maxOre: 100_000, stakes: [200, 400] },
@@ -60,7 +61,7 @@ const SESSION_TTL_MS = 2 * 60 * 60 * 1000;
    and the operator must refuse a launch token for an excluded/under-age player.
    The game RESPECTS those limits + surfaces the UI. In mock mode a working demo
    is implemented (session-scoped). See INTEGRATION.md. */
-const RTP_PCT = 69;                          // computed target RTP incl. economy boosts (~67% fixed + ~2pp pot, see rtp-sim.js) — RTP-verification + RNG cert by an accredited test house still PENDING (INTEGRATION.md). Do NOT edit without re-verification.
+const RTP_PCT = 66;                          // computed target RTP incl. economy boosts (~64% fixed + ~2pp pot, see rtp-sim.js) — RTP-verification + RNG cert by an accredited test house still PENDING (INTEGRATION.md). Do NOT edit without re-verification.
 const AGE_LIMIT = 18;
 const JURISDICTION_ALLOWLIST = ["NO"];
 const REALITY_CHECK_MS_DEFAULT = 60 * 60 * 1000;   // remind the player every hour (operator-overridable)
@@ -214,12 +215,14 @@ function deriveExtras(serverSeedHex, round) {
   const gullRoll = reader.u32();                    // 0..2^32-1
   const gullSlot = below(TICKETS_PER_SESSION);      // 0..TICKETS-1
   const bonusBall = below(TOTAL_NUMBERS) + 1;       // 1..TOTAL_NUMBERS
+  const bonusRoll = reader.u32();                   // gates whether THIS round has a bonus ball at all
   const gullActive = GULLBONG_ENABLED && (gullRoll / 0x100000000 < GULLBONG_FREQ);
+  const bonusActive = BONUSBALL_ENABLED && (bonusRoll / 0x100000000 < BONUSBALL_FREQ);
   return {
-    gullRoll, gullSlot, bonusBall,
-    gullActive,
+    gullRoll, gullSlot, bonusBall, bonusRoll,
+    gullActive, bonusActive,
     gullbongSlot: gullActive ? gullSlot : -1,
-    bonus: BONUSBALL_ENABLED ? bonusBall : null,
+    bonus: bonusActive ? bonusBall : null,         // null on non-bonus rounds → no ball, no boost
   };
 }
 const seeds = new Map(); // roundId → { serverSeedHex, commitHex }
@@ -362,7 +365,7 @@ async function runRound() {
 
   broadcast("round", {
     n: thisRound, numbers, intervalMs: ROUND_INTERVAL, jackpots: publicJackpots(), players: clients.size,
-    extras: { gullbongSlot: extras.gullbongSlot, gullMult: GULLBONG_MULT, gullFreq: GULLBONG_FREQ, bonusBall: extras.bonus, bonusPct: BONUS_PCT },
+    extras: { gullbongSlot: extras.gullbongSlot, gullMult: GULLBONG_MULT, gullFreq: GULLBONG_FREQ, bonusBall: extras.bonus, bonusPct: BONUS_PCT, bonusFreq: BONUSBALL_FREQ },
     fair: {
       version: FAIR_VERSION, clientSeed: FAIR_CLIENT_SEED,
       reveal: { round: thisRound, serverSeed: serverSeedHex, commit: commitHex },
@@ -533,7 +536,7 @@ async function apiSession(req, res, body) {
       jackpotSeedOre: { low: JACKPOT_TIERS.low.seedOre, high: JACKPOT_TIERS.high.seedOre },
       jackpotMaxOre: { low: JACKPOT_TIERS.low.maxOre, high: JACKPOT_TIERS.high.maxOre },
       gullbong: { enabled: GULLBONG_ENABLED, mult: GULLBONG_MULT, freq: GULLBONG_FREQ },
-      bonusBall: { enabled: BONUSBALL_ENABLED, pct: BONUS_PCT },
+      bonusBall: { enabled: BONUSBALL_ENABLED, pct: BONUS_PCT, freq: BONUSBALL_FREQ },
     },
     rg: { sessionStartedAt: session.rg.startedAt, lossSoFarOre: session.rg.lossSoFarOre, netOre: session.rg.netOre, limits, exclusion: session.rg.exclusion, realityCheckMs },
     fair: {
@@ -759,10 +762,10 @@ async function apiVerify(req, res, params) {
     serverSeed: log.serverSeedHex,
     commit: log.commitHex,
     numbers: log.numbers,
-    // raw seed-derived inputs so any auditor can reproduce gullActive = gullRoll/2^32 < gullbongFreq
+    // raw seed-derived inputs so any auditor can reproduce gull/bonus activation independently
     extras: log.extras ? {
-      gullbongSlot: log.extras.gullbongSlot, gullRoll: log.extras.gullRoll, gullSlot: log.extras.gullSlot,
-      gullbongFreq: GULLBONG_FREQ, bonusBall: log.extras.bonus,
+      gullbongSlot: log.extras.gullbongSlot, gullRoll: log.extras.gullRoll, gullSlot: log.extras.gullSlot, gullbongFreq: GULLBONG_FREQ,
+      bonusBall: log.extras.bonus, bonusRoll: log.extras.bonusRoll, bonusBallRaw: log.extras.bonusBall, bonusFreq: BONUSBALL_FREQ,
     } : null,
     at: log.at,
   });

@@ -830,11 +830,14 @@ const Fair = (() => {
     const gullRoll = await r.u32();
     const gullSlot = await r.below(tickets);
     const bonusBall = (await r.below(total)) + 1;
+    const bonusRoll = await r.u32();
     const gEnabled = !!(config.gullbong && config.gullbong.enabled);
     const gFreq = (config.gullbong && config.gullbong.freq) || 0;
     const gullActive = gEnabled && (gullRoll / 0x100000000 < gFreq);
     const bEnabled = !!(config.bonusBall && config.bonusBall.enabled);
-    return { gullbongSlot: gullActive ? gullSlot : -1, bonus: bEnabled ? bonusBall : null };
+    const bFreq = (config.bonusBall && config.bonusBall.freq) || 0;
+    const bonusActive = bEnabled && (bonusRoll / 0x100000000 < bFreq);
+    return { gullbongSlot: gullActive ? gullSlot : -1, bonus: bonusActive ? bonusBall : null };
   }
   return { available: !!subtle, sha256hex, hexToBytes, deriveDraw, deriveExtras };
 })();
@@ -897,9 +900,9 @@ function applyTrustConfig() {
     modeBadge.classList.toggle("demo", demo);
     modeBadge.classList.toggle("real", !demo);
   }
-  const rtp = config.rtpPct || 69;
+  const rtp = config.rtpPct || 66;
   const setTxt = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
-  setTxt("rtpVal", `~${rtp}%`);       // a target/estimate (cert pending) — never a definitive figure
+  setTxt("rtpVal", `~${rtp}%`);       // (RTP UI removed from the strip; kept null-safe for any future use)
   setTxt("rtpInfoVal", `~${rtp}%`);
   setTxt("rtpOdds", `${config.drawsPerRound || 4} av ${config.numbersTotal || 20} tall trekkes`);
   // help line + licence in the always-on strip

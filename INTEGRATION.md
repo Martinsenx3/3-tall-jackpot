@@ -126,25 +126,27 @@ multiplikator-delen** av en gevinst (`MULT × innsats`) — **aldri** den delte 
 - **Gullbong (×2):** i ca. `GULLBONG_FREQ` (25 %) av rundene aktiveres én global bong-plass
   (`gullbongSlot`, lik for alle i den synkroniserte runden). En *vinnende* bong på den plassen
   betaler `×GULLBONG_MULT` (2) på multiplikator-delen. Telegrafert i `round`-hendelsen før trekning.
-- **Bonusball (+50 %):** en femte gyllen ball (`bonusBall`, 1–20) trekkes til slutt. En *vinnende*
-  bong hvis payline inneholder bonustallet får `+BONUS_PCT` (50 %) på multiplikator-delen.
+- **Bonusball (+50 %):** i ca. `BONUSBALL_FREQ` (20 %) av rundene — **ikke hver runde** — trekkes en
+  femte gyllen ball (`bonusBall`, 1–20) til slutt. En *vinnende* bong hvis payline inneholder
+  bonustallet får `+BONUS_PCT` (50 %) på multiplikator-delen. Ingen bonusball på de andre rundene.
 
 **Utledning** (`deriveExtras`): egen HMAC-SHA256-strøm med `publicInput`-suffiks `:x` (så de 4
 tallene fra `deriveDraw` er byte-for-byte uendret). Lesrekkefølge: `gullRoll=u32`,
-`gullSlot=below(TICKETS)`, `bonusBall=below(TOTAL)+1`; `gullActive = ENABLED && gullRoll/2³² < FREQ`.
+`gullSlot=below(TICKETS)`, `bonusBall=below(TOTAL)+1`, `bonusRoll=u32`;
+`gullActive = ENABLED && gullRoll/2³² < GULLBONG_FREQ`, `bonusActive = ENABLED && bonusRoll/2³² < BONUSBALL_FREQ`.
 Alt er heltalls-øre (`Math.floor` på +50 %).
 
-**Verifiserbarhet:** `GULLBONG_FREQ` ligger i `config.gullbong.freq` og `round`-hendelsen, og
-`/api/verify` returnerer de rå frø-verdiene (`gullRoll`, `gullSlot`, `gullbongFreq`, `bonusBall`) —
-så enhver revisor kan reberegne `gullActive` og `gullbongSlot` fra det avslørte frøet alene.
-Klienten reberegner OGSÅ boostsene i nettleseren (`Fair.deriveExtras`) og «Bevisbar rettferdig»-merket
-er grønt kun når **tall + boosts** stemmer.
+**Verifiserbarhet:** frekvensene ligger i `config.gullbong.freq` / `config.bonusBall.freq` og i
+`round`-hendelsen, og `/api/verify` returnerer de rå frø-verdiene (`gullRoll`, `gullSlot`,
+`gullbongFreq`, `bonusRoll`, `bonusBallRaw`, `bonusFreq`) — så enhver revisor kan reberegne både
+`gullActive`/`gullbongSlot` og `bonusActive`/`bonusBall` fra det avslørte frøet alene. Klienten
+reberegner OGSÅ boostsene i nettleseren (`Fair.deriveExtras`).
 
-**RTP-virkning** (se `rtp-sim.js`, Monte-Carlo): fast-premie-RTP **59,7 % → 67,3 %** (+7,6 pp);
-inkludert progressiv pott (~+2 pp) ≈ **~69 %**. `RTP_PCT` er satt til **69** og vises i klienten som
-et **mål** («RTP-mål ~69 %», ikke et definitivt tall) — **RTP-verifikasjon hos akkreditert testhus
-utestående**, og må kjøres på nytt etter enhver endring av multiplikatorer/frekvenser. Skru av med
-`GULLBONG_ENABLED` / `BONUSBALL_ENABLED`.
+**RTP-virkning** (se `rtp-sim.js`, Monte-Carlo): fast-premie-RTP **59,7 % → 64,1 %** (+4,4 pp);
+inkludert progressiv pott (~+2 pp) ≈ **~66 %**. `RTP_PCT` er satt til **66**. Bonusball gjelder nå kun
+~20 % av rundene (ikke hver runde) for å holde RTP nede og gjøre den til et spesial-event. Fortsatt et
+**mål** — **RTP-verifikasjon hos akkreditert testhus utestående**, og må kjøres på nytt etter enhver
+endring av multiplikatorer/frekvenser. Skru av med `GULLBONG_ENABLED` / `BONUSBALL_ENABLED`.
 
 ## Konfigurasjon (env)
 
