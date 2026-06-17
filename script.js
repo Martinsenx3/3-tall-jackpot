@@ -1191,15 +1191,23 @@ async function boot() {
    ============================================================ */
 (function fitCanvas() {
   const canvas = document.getElementById("canvas");
+  const wrap = document.querySelector(".wrap");
   const mobile = window.matchMedia("(max-width: 820px)");
   function fit() {
-    if (mobile.matches) { canvas.style.transform = "none"; return; } // mobile uses the reflowed vertical layout
-    const s = Math.min(window.innerWidth / 1600, window.innerHeight / 1000) * 0.9; // leave margin so it always fits
+    if (mobile.matches) { canvas.style.transform = "none"; canvas.style.height = ""; return; } // mobile reflows vertically
+    // Size the canvas to its ACTUAL content height so nothing is ever clipped, then scale the whole
+    // board to fit the viewport (width AND height) with a small margin.
+    canvas.style.height = "1000px";                          // reset to read the natural content height
+    const contentH = Math.max(1000, wrap ? wrap.scrollHeight : 1000);
+    canvas.style.height = `${contentH}px`;
+    const s = Math.min(window.innerWidth / 1600, window.innerHeight / contentH) * 0.97;
     canvas.style.transform = `scale(${s})`;
   }
   window.addEventListener("resize", fit);
   if (mobile.addEventListener) mobile.addEventListener("change", () => { fit(); placeBulbs(); });
   fit();
+  window.addEventListener("load", fit);                      // re-fit once fonts/layout settle
+  setTimeout(fit, 400);
 })();
 
 (function sparkles() {
