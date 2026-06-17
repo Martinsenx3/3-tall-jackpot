@@ -330,7 +330,10 @@ function showWinRecap(result) {
     .slice().sort((a, b) => b.amountOre - a.amountOre)
     .map((b) => `<div class="recap-row"><span>Bong ${Number(b.bong) + 1} · ${bongLabel(b.type)}</span><b class="gold">${formatKrSigned(b.amountOre)}</b></div>`)
     .join("");
-  openModal(document.getElementById("winRecap"));
+  const card = document.getElementById("winRecap");
+  openModal(card);
+  clearTimeout(showWinRecap._t);
+  showWinRecap._t = setTimeout(() => closeModal(card), 2000);   // auto-close after 2s
 }
 (function wireRecapShare() {
   const btn = document.getElementById("recapShare");
@@ -1192,7 +1195,7 @@ async function boot() {
   const mobile = window.matchMedia("(max-width: 820px)");
   function fit() {
     if (mobile.matches) { canvas.style.transform = "none"; return; } // mobile uses the reflowed vertical layout
-    const s = Math.min(window.innerWidth / 1600, window.innerHeight / 1000);
+    const s = Math.min(window.innerWidth / 1600, window.innerHeight / 1000) * 0.9; // leave margin so it always fits
     canvas.style.transform = `scale(${s})`;
   }
   window.addEventListener("resize", fit);

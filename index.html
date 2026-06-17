@@ -34,9 +34,7 @@
       <!-- TRUST STRIP: demo/real · RTP · session timer · provably-fair badge -->
       <div class="trust-strip" id="trustStrip">
         <span class="mode-badge demo" id="modeBadge">DEMO · LEKEPENGER</span>
-        <button class="rtp-badge" id="rtpBadge" type="button" title="Utbetalingsprosent (mål)">RTP-mål <b id="rtpVal">~69%</b> <span class="i">i</span></button>
         <span class="sess-timer" id="sessTimerWrap">⏱ <b id="sessTimer">0:00</b></span>
-        <button class="fair-badge neutral" id="fairBadge" type="button" title="Bevisbar rettferdig"><span class="fb-mark">🛡</span><span class="fb-txt">Rettferdig</span></button>
       </div>
 
       <div class="wrap">
@@ -223,24 +221,6 @@
         <span class="rg-lic" id="licenceText">Demo — ingen ekte innsats</span>
       </div>
 
-      <!-- RTP / ODDS INFO -->
-      <div class="modal" id="rtpInfo" hidden>
-        <div class="modal-card">
-          <button class="modal-x" type="button" data-close aria-label="Lukk">✕</button>
-          <div class="modal-title cinzel">Utbetaling & odds</div>
-          <p class="modal-lead">Spillet er bygd for å betale tilbake ca. <b class="gold" id="rtpInfoVal">~69%</b> av innsatsen over tid (RTP-mål — ikke ennå sertifisert av akkreditert testhus). <span id="rtpOdds">4 av 20 tall trekkes</span>. Hver runde er uavhengig av de forrige.</p>
-          <div class="intro-pay">
-            <div class="ipay"><span class="ipl">2 RETTE</span><span class="ipv gold">5× innsats</span><span class="ips">2 av tallene dine</span></div>
-            <div class="ipay"><span class="ipl">3 RETTE</span><span class="ipv gold">50× innsats</span><span class="ips">alle 3 på 4 trekk</span></div>
-            <div class="ipay jp"><span class="ipl">JACKPOT</span><span class="ipv gold">50× + pott</span><span class="ips">alle 3 på de 3 første</span></div>
-          </div>
-          <div class="boosts">
-            <div class="boost"><span class="boost-ico">⭐</span><div><b>Gullbong</b> — i noen runder gir én tilfeldig bong <b class="gold">×2</b> på gevinsten. Vises før trekningen.</div></div>
-            <div class="boost"><span class="boost-ico">🟡</span><div><b>Bonusball</b> — en gyllen ball trekkes til slutt; treffer den et tall på en vinnende bong, øker gevinsten <b class="gold">+50%</b>.</div></div>
-          </div>
-          <div class="modal-actions"><button class="mbtn ghost" id="rtpFairBtn" type="button">🛡 Bevisbar rettferdig</button><button class="mbtn primary" type="button" data-close>Lukk</button></div>
-        </div>
-      </div>
 
       <!-- ANSVARLIG SPILL HUB -->
       <div class="modal" id="rgHub" hidden>
@@ -273,7 +253,6 @@
           </div>
           <div class="modal-actions">
             <button class="mbtn ghost" id="histOpenBtn" type="button">📜 Historikk</button>
-            <button class="mbtn ghost" id="rgFairBtn" type="button">🛡 Rettferdighet</button>
           </div>
           <p class="rg-foot"><span class="age-pill age-limit">18+</span> Spill med måte. <a id="rgHubHelp" href="https://hjelpelinjen.no" target="_blank" rel="noopener">Hjelpelinjen 800 800 40</a></p>
         </div>
@@ -302,21 +281,6 @@
         </div>
       </div>
 
-      <!-- PROVABLY-FAIR VERIFY PANEL -->
-      <div class="modal" id="fairPanel" hidden>
-        <div class="modal-card">
-          <button class="modal-x" type="button" data-close aria-label="Lukk">✕</button>
-          <div class="modal-title cinzel">🛡 Bevisbar rettferdig</div>
-          <p class="modal-lead">Hver trekning er låst på forhånd med en kryptografisk forpliktelse (commit), og frøet avsløres etterpå — så du kan regne ut tallene selv og bekrefte at de ikke ble endret.</p>
-          <div class="fair-rows">
-            <div class="fair-row"><span class="k">Neste runde</span><b id="fairCommitRound">—</b></div>
-            <div class="fair-row"><span class="k">Klientfrø</span><code id="fairClientSeed">—</code></div>
-            <div class="fair-row"><span class="k">Forpliktelse (commit)</span><code class="hash" id="fairCommitHash">—</code></div>
-          </div>
-          <div class="fair-result neutral" id="fairResult">Venter på første trekning…</div>
-          <div class="modal-actions"><button class="mbtn ghost" id="fairVerifyBtn" type="button">Verifiser siste runde</button><button class="mbtn primary" type="button" data-close>Lukk</button></div>
-        </div>
-      </div>
 
       <!-- RESPONSIBLE-GAMING LOCK (full cover, non-dismissable) -->
       <div class="modal rg-lock" id="rgLock" hidden>
