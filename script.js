@@ -30,6 +30,7 @@ let balanceOre = 0;
 let jackpots = { low: 0, high: 0 };
 let activeBet = null;               // {betId, roundId, stakeOre, active} for the UPCOMING round
 let participating = false;          // my bet is in the round being animated
+let roundExtras = null;             // {gullbongSlot, gullMult, bonusBall, bonusPct} for the animating round
 let isDrawing = false;
 let busy = false;                   // an API call is in flight
 let online = false;
@@ -289,8 +290,8 @@ function renderTickets() {
   });
 }
 function clearTicketStates() {
-  document.querySelectorAll(".bong").forEach((b) => { b.classList.remove("near-win", "payfire"); b.removeAttribute("data-hits"); });
-  document.querySelectorAll(".cell").forEach((c) => c.classList.remove("hit", "fresh", "miss"));
+  document.querySelectorAll(".bong").forEach((b) => { b.classList.remove("near-win", "payfire", "gullbong"); b.removeAttribute("data-hits"); });
+  document.querySelectorAll(".cell").forEach((c) => c.classList.remove("hit", "fresh", "miss", "bonushit"));
   document.querySelectorAll(".payline").forEach((p) => p.classList.remove("sweep"));
   hideNearBanner();
 }
@@ -407,11 +408,20 @@ function runRound(roundId, numbers) {
   revealEl.innerHTML = "";
   updateControls();
 
+  // telegraph the gullbong (×2) — only on a bong the player actually activated, since that is the
+  // ONLY bong where settlement can pay the ×2 (server: idx === gullbongSlot AND idx ∈ activeIdx)
+  if (participating && roundExtras && roundExtras.gullbongSlot >= 0 && idxs.includes(roundExtras.gullbongSlot)) {
+    const gb = document.querySelector(`.bong[data-bong="${roundExtras.gullbongSlot}"]`);
+    if (gb) gb.classList.add("gullbong");
+    showNearBanner(`⭐ GULLBONG — Bong ${roundExtras.gullbongSlot + 1} gir ×${roundExtras.gullMult || 2}!`);
+    setTimeout(hideNearBanner, 2400);   // dismissed by its own timer; step() won't wipe it on the first ball (i===0)
+  }
+
   const drawn = [];
   let i = 0;
   let tenseNext = false;
   function step() {
-    hideNearBanner();
+    if (i > 0) hideNearBanner();   // keep the gullbong telegraph visible through the first ball (its own timer dismisses it)
     const n = numbers[i];
     revealEl.className = `reveal ${ballTone(n)}${tenseNext ? " tense" : ""}`;
     revealEl.innerHTML = `<span class="face">${n}</span>`;
@@ -438,10 +448,42 @@ function runRound(roundId, numbers) {
           drawTimer = setTimeout(step, near ? SUSPENSE_MS : BETWEEN_MS);
         } else {
           machineEl.classList.remove("tense");
-          drawTimer = setTimeout(() => finishRound(roundId), END_MS);
+          hideNearBanner();
+          const finish = () => { drawTimer = setTimeout(() => finishRound(roundId), END_MS); };
+          if (roundExtras && roundExtras.bonusBall != null) drawTimer = setTimeout(() => bonusStep(finish), BETWEEN_MS);
+          else finish();
         }
       }, DROP_MS);
     }, REVEAL_MS);
+  }
+  /* the gold bonus ball — drawn after the four numbers; boosts a winning bong it appears on */
+  function bonusStep(done) {
+    const n = roundExtras.bonusBall;
+    revealEl.className = "reveal bonus";
+    revealEl.innerHTML = `<span class="face">${n}</span>`;
+    void revealEl.offsetWidth;
+    revealEl.classList.add("fill");
+    Sound.reveal();
+    drawTimer = setTimeout(() => {
+      revealEl.classList.remove("fill");
+      revealEl.classList.add("drop");
+      drawTimer = setTimeout(() => {
+        revealEl.className = "reveal";
+        revealEl.innerHTML = "";
+        const ball = document.createElement("div");
+        ball.className = "db bonus pop";
+        ball.innerHTML = `<span class="face">${n}</span><span class="btag">BONUS</span>`;
+        drawnNumbersEl.appendChild(ball);
+        Sound.land();
+        if (participating) {
+          idxs.forEach((id) => {
+            const bong = document.querySelector(`.bong[data-bong="${id}"]`);
+            if (bong) bong.querySelectorAll(`.cell.mid[data-n="${n}"]`).forEach((c) => c.classList.add("bonushit"));
+          });
+        }
+        done();
+      }, DROP_MS);
+    }, Math.round(REVEAL_MS * 0.75));
   }
   step();
 }
@@ -754,10 +796,9 @@ const Fair = (() => {
     const key = await subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
     return new Uint8Array(await subtle.sign("HMAC", key, new TextEncoder().encode(msgStr)));
   }
-  async function deriveDraw(serverSeedHex, round, clientSeed, version) {
-    const total = config.numbersTotal || 20, draws = config.drawsPerRound || 4;
+  // a reader over the concatenation of HMAC-SHA256(seed, `${pi}:${block}`) — mirrors server fairReader
+  function makeReader(serverSeedHex, pi) {
     const seed = hexToBytes(serverSeedHex);
-    const pi = `${version}:${clientSeed}:${round}`;
     let block = 0, buf = new Uint8Array(0), pos = 0;
     async function u32() {
       while (buf.length - pos < 4) {
@@ -769,11 +810,30 @@ const Fair = (() => {
       const w = (buf[pos] * 0x1000000) + (buf[pos + 1] * 0x10000) + (buf[pos + 2] * 0x100) + buf[pos + 3]; pos += 4; return w >>> 0;
     }
     async function below(n) { const lim = Math.floor(0x100000000 / n) * n; let w; do { w = await u32(); } while (w >= lim); return w % n; }
+    return { u32, below };
+  }
+  async function deriveDraw(serverSeedHex, round, clientSeed, version) {
+    const total = config.numbersTotal || 20, draws = config.drawsPerRound || 4;
+    const r = makeReader(serverSeedHex, `${version}:${clientSeed}:${round}`);
     const a = Array.from({ length: total }, (_, i) => i + 1); const picks = [];
-    for (let i = a.length - 1; i > 0 && picks.length < draws; i -= 1) { const j = await below(i + 1); [a[i], a[j]] = [a[j], a[i]]; picks.push(a[i]); }
+    for (let i = a.length - 1; i > 0 && picks.length < draws; i -= 1) { const j = await r.below(i + 1); [a[i], a[j]] = [a[j], a[i]]; picks.push(a[i]); }
     return picks;
   }
-  return { available: !!subtle, sha256hex, hexToBytes, deriveDraw };
+  // recompute the economy extras from the SAME revealed seed (publicInput + ":x") so the boosts that
+  // change real-money payouts are inside the verified surface, not trusted blindly
+  async function deriveExtras(serverSeedHex, round, clientSeed, version) {
+    const total = config.numbersTotal || 20, tickets = config.ticketsPerSession || 4;
+    const r = makeReader(serverSeedHex, `${version}:${clientSeed}:${round}:x`);
+    const gullRoll = await r.u32();
+    const gullSlot = await r.below(tickets);
+    const bonusBall = (await r.below(total)) + 1;
+    const gEnabled = !!(config.gullbong && config.gullbong.enabled);
+    const gFreq = (config.gullbong && config.gullbong.freq) || 0;
+    const gullActive = gEnabled && (gullRoll / 0x100000000 < gFreq);
+    const bEnabled = !!(config.bonusBall && config.bonusBall.enabled);
+    return { gullbongSlot: gullActive ? gullSlot : -1, bonus: bEnabled ? bonusBall : null };
+  }
+  return { available: !!subtle, sha256hex, hexToBytes, deriveDraw, deriveExtras };
 })();
 
 function storeFair(f) {
@@ -789,7 +849,13 @@ async function verifyRound(reveal, drawnNumbers) {
     const commitOk = (await Fair.sha256hex(Fair.hexToBytes(reveal.serverSeed))) === reveal.commit;
     const recomputed = await Fair.deriveDraw(reveal.serverSeed, reveal.round, fair.clientSeed, fair.version);
     const numbersOk = Array.isArray(drawnNumbers) && JSON.stringify(recomputed) === JSON.stringify(drawnNumbers);
-    fair.lastVerify = { ok: commitOk && numbersOk, round: reveal.round, commit: reveal.commit, serverSeed: reveal.serverSeed, recomputed, drawn: drawnNumbers, commitOk, numbersOk };
+    // also verify the RTP-affecting boosts (gullbong slot + bonus ball) against the reported values
+    let extrasOk = true;
+    if (roundExtras) {
+      const ex = await Fair.deriveExtras(reveal.serverSeed, reveal.round, fair.clientSeed, fair.version);
+      extrasOk = ex.gullbongSlot === roundExtras.gullbongSlot && ex.bonus === (roundExtras.bonusBall ?? null);
+    }
+    fair.lastVerify = { ok: commitOk && numbersOk && extrasOk, round: reveal.round, commit: reveal.commit, serverSeed: reveal.serverSeed, recomputed, drawn: drawnNumbers, commitOk, numbersOk, extrasOk };
   } catch (e) { fair.lastVerify = { ok: null, reason: "error" }; }
   renderFairBadge();
   renderFairPanel();
@@ -814,7 +880,7 @@ function renderFairPanel() {
   if (!resEl) return;
   if (!Fair.available) { resEl.className = "fair-result neutral"; resEl.textContent = "Verifisering krever en sikker (HTTPS) tilkobling."; return; }
   if (!v) { resEl.className = "fair-result neutral"; resEl.textContent = "Venter på første trekning…"; return; }
-  if (v.ok === true) { resEl.className = "fair-result ok"; resEl.innerHTML = `✓ Runde #${v.round} verifisert. Tallene <b>${(v.drawn || []).join(", ")}</b> stemmer med den forhåndspubliserte forpliktelsen.`; }
+  if (v.ok === true) { resEl.className = "fair-result ok"; resEl.innerHTML = `✓ Runde #${v.round} verifisert — tall <b>${(v.drawn || []).join(", ")}</b>${v.extrasOk ? " + premie-boosts" : ""} stemmer med den forhåndspubliserte forpliktelsen.`; }
   else if (v.ok === false) { resEl.className = "fair-result bad"; resEl.innerHTML = `✕ Avvik i runde #${v.round}! Reberegnet ${(v.recomputed || []).join(", ")} vs trukket ${(v.drawn || []).join(", ")} (commit ${v.commitOk ? "ok" : "feil"}).`; }
   else { resEl.className = "fair-result neutral"; resEl.textContent = "Kunne ikke verifisere."; }
 }
@@ -828,10 +894,10 @@ function applyTrustConfig() {
     modeBadge.classList.toggle("demo", demo);
     modeBadge.classList.toggle("real", !demo);
   }
-  const rtp = config.rtpPct || 70;
+  const rtp = config.rtpPct || 69;
   const setTxt = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
-  setTxt("rtpVal", `${rtp}%`);
-  setTxt("rtpInfoVal", `${rtp}%`);
+  setTxt("rtpVal", `~${rtp}%`);       // a target/estimate (cert pending) — never a definitive figure
+  setTxt("rtpInfoVal", `~${rtp}%`);
   setTxt("rtpOdds", `${config.drawsPerRound || 4} av ${config.numbersTotal || 20} tall trekkes`);
   // help line + licence in the always-on strip
   const help = config.helpLine || { name: "Hjelpelinjen", phone: "800 800 40", url: "https://hjelpelinjen.no" };
@@ -1055,6 +1121,7 @@ function connect() {
     recentRounds.unshift([...d.numbers]);
     recentRounds = recentRounds.slice(0, 10);
     updateHotColdBoard();
+    roundExtras = d.extras || null;
     runRound(d.n, d.numbers);
   });
   source.addEventListener("players", (e) => { setPlayers(JSON.parse(e.data).players); });

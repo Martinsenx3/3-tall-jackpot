@@ -112,9 +112,39 @@ Et **tillitslag oppå** CSPRNG-en — det erstatter **ikke** RNG-sertifisering f
    - Jackpot (3 av 3 blant de 3 første trekkene): `50 × innsats` + andel av potten
    - 3 rette (på 4 trekk): `50 × innsats`
    - 2 rette: `5 × innsats`
+   - **Premie-boosts** (se under) påvirker KUN den faste multiplikator-delen, aldri potten
 5. Gevinster krediteres med `win-{betId}` (idempotent), resultat + saldo hentes av klienten
 6. Jackpottene (to nivåer: 2–4 kr og 8–16 kr innsats) er **felles for alle spillere**,
    mates med 2 % av innsatsene i sitt nivå, og deles likt mellom vinnende bonger
+
+## Premie-boosts (Gullbong + Bonusball)
+
+To spennings-mekanikker som **øker RTP** og **utledes fra rundens provably-fair-frø**
+(verifiserbare via `GET /api/verify`, ikke manipulerbare). Begge gjelder **kun den faste
+multiplikator-delen** av en gevinst (`MULT × innsats`) — **aldri** den delte potten.
+
+- **Gullbong (×2):** i ca. `GULLBONG_FREQ` (25 %) av rundene aktiveres én global bong-plass
+  (`gullbongSlot`, lik for alle i den synkroniserte runden). En *vinnende* bong på den plassen
+  betaler `×GULLBONG_MULT` (2) på multiplikator-delen. Telegrafert i `round`-hendelsen før trekning.
+- **Bonusball (+50 %):** en femte gyllen ball (`bonusBall`, 1–20) trekkes til slutt. En *vinnende*
+  bong hvis payline inneholder bonustallet får `+BONUS_PCT` (50 %) på multiplikator-delen.
+
+**Utledning** (`deriveExtras`): egen HMAC-SHA256-strøm med `publicInput`-suffiks `:x` (så de 4
+tallene fra `deriveDraw` er byte-for-byte uendret). Lesrekkefølge: `gullRoll=u32`,
+`gullSlot=below(TICKETS)`, `bonusBall=below(TOTAL)+1`; `gullActive = ENABLED && gullRoll/2³² < FREQ`.
+Alt er heltalls-øre (`Math.floor` på +50 %).
+
+**Verifiserbarhet:** `GULLBONG_FREQ` ligger i `config.gullbong.freq` og `round`-hendelsen, og
+`/api/verify` returnerer de rå frø-verdiene (`gullRoll`, `gullSlot`, `gullbongFreq`, `bonusBall`) —
+så enhver revisor kan reberegne `gullActive` og `gullbongSlot` fra det avslørte frøet alene.
+Klienten reberegner OGSÅ boostsene i nettleseren (`Fair.deriveExtras`) og «Bevisbar rettferdig»-merket
+er grønt kun når **tall + boosts** stemmer.
+
+**RTP-virkning** (se `rtp-sim.js`, Monte-Carlo): fast-premie-RTP **59,7 % → 67,3 %** (+7,6 pp);
+inkludert progressiv pott (~+2 pp) ≈ **~69 %**. `RTP_PCT` er satt til **69** og vises i klienten som
+et **mål** («RTP-mål ~69 %», ikke et definitivt tall) — **RTP-verifikasjon hos akkreditert testhus
+utestående**, og må kjøres på nytt etter enhver endring av multiplikatorer/frekvenser. Skru av med
+`GULLBONG_ENABLED` / `BONUSBALL_ENABLED`.
 
 ## Konfigurasjon (env)
 

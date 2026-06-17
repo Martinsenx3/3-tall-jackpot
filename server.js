@@ -34,6 +34,18 @@ const STAKE_OPTIONS_ORE = [200, 400, 800, 1600];
 const MULT_2 = 5;                    // 2 rette  → 5 × innsats
 const MULT_3 = 50;                   // 3 rette  → 50 × innsats
 const MULT_JP = 50;                  // jackpot  → 50 × innsats + andel av potten
+
+/* ---------- economy boosts (Gullbong + Bonusball) ----------
+   BOTH are derived from the round's provably-fair seed (verifiable, not
+   manipulable) and applied ONLY to the fixed multiplier part of a win — never
+   to the shared progressive pot, so pot integrity is preserved. They RAISE RTP;
+   the resulting RTP is computed (see rtp-sim) and surfaced honestly. Re-cert
+   required before real money. Tune freq/mult here; all integer-øre math. */
+const GULLBONG_ENABLED = true;
+const GULLBONG_MULT = 2;             // a winning gullbong pays ×2 on its multiplier part
+const GULLBONG_FREQ = 0.25;          // ~1 in 4 rounds is a (telegraphed) gullbong round
+const BONUSBALL_ENABLED = true;
+const BONUS_PCT = 50;                // +50 % to a winning bong whose payline contains the bonus number
 const JACKPOT_TIERS = {
   low:  { seedOre: 25_000,  maxOre: 100_000, stakes: [200, 400] },
   high: { seedOre: 150_000, maxOre: 500_000, stakes: [800, 1600] },
@@ -48,7 +60,7 @@ const SESSION_TTL_MS = 2 * 60 * 60 * 1000;
    and the operator must refuse a launch token for an excluded/under-age player.
    The game RESPECTS those limits + surfaces the UI. In mock mode a working demo
    is implemented (session-scoped). See INTEGRATION.md. */
-const RTP_PCT = 70;                          // target RTP for the current paytable — RTP-verification + RNG cert by an accredited test house still PENDING (see INTEGRATION.md). Do NOT edit without re-verification.
+const RTP_PCT = 69;                          // computed target RTP incl. economy boosts (~67% fixed + ~2pp pot, see rtp-sim.js) — RTP-verification + RNG cert by an accredited test house still PENDING (INTEGRATION.md). Do NOT edit without re-verification.
 const AGE_LIMIT = 18;
 const JURISDICTION_ALLOWLIST = ["NO"];
 const REALITY_CHECK_MS_DEFAULT = 60 * 60 * 1000;   // remind the player every hour (operator-overridable)
@@ -193,6 +205,23 @@ function deriveDraw(serverSeedHex, round) {
   }
   return picks;
 }
+// Economy extras (gullbong slot + bonus ball), derived from a SEPARATE keystream
+// (publicInput suffix ":x") so the 4-number draw above is byte-for-byte unchanged.
+// Raw rolls are seed-only (verifiable); the enabled/freq config is applied on top.
+function deriveExtras(serverSeedHex, round) {
+  const reader = fairReader(Buffer.from(serverSeedHex, "hex"), `${fairPublicInput(round)}:x`);
+  function below(n) { const limit = Math.floor(0x100000000 / n) * n; let w; do { w = reader.u32(); } while (w >= limit); return w % n; }
+  const gullRoll = reader.u32();                    // 0..2^32-1
+  const gullSlot = below(TICKETS_PER_SESSION);      // 0..TICKETS-1
+  const bonusBall = below(TOTAL_NUMBERS) + 1;       // 1..TOTAL_NUMBERS
+  const gullActive = GULLBONG_ENABLED && (gullRoll / 0x100000000 < GULLBONG_FREQ);
+  return {
+    gullRoll, gullSlot, bonusBall,
+    gullActive,
+    gullbongSlot: gullActive ? gullSlot : -1,
+    bonus: BONUSBALL_ENABLED ? bonusBall : null,
+  };
+}
 const seeds = new Map(); // roundId → { serverSeedHex, commitHex }
 function ensureSeed(roundId) {
   let s = seeds.get(roundId);
@@ -219,15 +248,16 @@ async function runRound() {
   // no await before settlement, so the 22s cadence and apiBet microtask-atomicity are intact).
   const { serverSeedHex, commitHex } = ensureSeed(thisRound);
   const numbers = deriveDraw(serverSeedHex, thisRound);
+  const extras = deriveExtras(serverSeedHex, thisRound);   // gullbong slot + bonus ball (provably-fair)
   const nextCommit = commitFor(thisRound + 1); // commit the next betting round before this broadcast
   nextRoundAt = Date.now() + ROUND_INTERVAL;
   setTimeout(runRound, ROUND_INTERVAL);
-  roundLog.set(thisRound, { numbers, at: Date.now(), serverSeedHex, commitHex, clientSeed: FAIR_CLIENT_SEED, version: FAIR_VERSION });
+  roundLog.set(thisRound, { numbers, at: Date.now(), serverSeedHex, commitHex, clientSeed: FAIR_CLIENT_SEED, version: FAIR_VERSION, extras });
 
   const bets = pendingBets.get(thisRound) || new Map();
   pendingBets.delete(thisRound);
   reservations.delete(thisRound);
-  audit("round", { round: thisRound, numbers, bets: bets.size, commit: commitHex, serverSeed: serverSeedHex });
+  audit("round", { round: thisRound, numbers, bets: bets.size, commit: commitHex, serverSeed: serverSeedHex, gullbong: extras.gullbongSlot, bonus: extras.bonus });
 
   /* 1) pots grow from this round's stakes (per tier) */
   for (const bet of bets.values()) {
@@ -267,17 +297,20 @@ async function runRound() {
       const mid = bet.ticketsSnapshot[idx].mid;
       const isJp = mid.every((n) => firstThree.includes(n));
       const hits = mid.filter((n) => numbers.includes(n)).length;
-      if (isJp) {
-        const amount = MULT_JP * bet.stakeOre + jpShare[tier];
-        winOre += amount;
-        breakdown.push({ bong: idx, type: "jackpot", amountOre: amount });
-      } else if (hits === 3) {
-        winOre += MULT_3 * bet.stakeOre;
-        breakdown.push({ bong: idx, type: "3-rette", amountOre: MULT_3 * bet.stakeOre });
-      } else if (hits === 2) {
-        winOre += MULT_2 * bet.stakeOre;
-        breakdown.push({ bong: idx, type: "2-rette", amountOre: MULT_2 * bet.stakeOre });
-      }
+      let type = null, multPart = 0, potPart = 0;
+      if (isJp) { type = "jackpot"; multPart = MULT_JP * bet.stakeOre; potPart = jpShare[tier]; }
+      else if (hits === 3) { type = "3-rette"; multPart = MULT_3 * bet.stakeOre; }
+      else if (hits === 2) { type = "2-rette"; multPart = MULT_2 * bet.stakeOre; }
+      if (!type) continue;
+      /* Economy boosts apply to the FIXED multiplier part only (never the shared pot), integer øre. */
+      const bonusHit = extras.bonus != null && mid.includes(extras.bonus);
+      const isGull = extras.gullActive && idx === extras.gullbongSlot;
+      let boostOre = 0;
+      if (bonusHit) boostOre += Math.floor(multPart * BONUS_PCT / 100);
+      if (isGull) boostOre += multPart * (GULLBONG_MULT - 1);
+      const amount = multPart + potPart + boostOre;
+      winOre += amount;
+      breakdown.push({ bong: idx, type, amountOre: amount, ...(isGull ? { gull: true } : {}), ...(bonusHit ? { bonus: true } : {}) });
     }
 
     let balanceAfter = null;
@@ -329,6 +362,7 @@ async function runRound() {
 
   broadcast("round", {
     n: thisRound, numbers, intervalMs: ROUND_INTERVAL, jackpots: publicJackpots(), players: clients.size,
+    extras: { gullbongSlot: extras.gullbongSlot, gullMult: GULLBONG_MULT, gullFreq: GULLBONG_FREQ, bonusBall: extras.bonus, bonusPct: BONUS_PCT },
     fair: {
       version: FAIR_VERSION, clientSeed: FAIR_CLIENT_SEED,
       reveal: { round: thisRound, serverSeed: serverSeedHex, commit: commitHex },
@@ -498,6 +532,8 @@ async function apiSession(req, res, body) {
       licence: process.env.OPERATOR_LICENCE || "",
       jackpotSeedOre: { low: JACKPOT_TIERS.low.seedOre, high: JACKPOT_TIERS.high.seedOre },
       jackpotMaxOre: { low: JACKPOT_TIERS.low.maxOre, high: JACKPOT_TIERS.high.maxOre },
+      gullbong: { enabled: GULLBONG_ENABLED, mult: GULLBONG_MULT, freq: GULLBONG_FREQ },
+      bonusBall: { enabled: BONUSBALL_ENABLED, pct: BONUS_PCT },
     },
     rg: { sessionStartedAt: session.rg.startedAt, lossSoFarOre: session.rg.lossSoFarOre, netOre: session.rg.netOre, limits, exclusion: session.rg.exclusion, realityCheckMs },
     fair: {
@@ -723,6 +759,11 @@ async function apiVerify(req, res, params) {
     serverSeed: log.serverSeedHex,
     commit: log.commitHex,
     numbers: log.numbers,
+    // raw seed-derived inputs so any auditor can reproduce gullActive = gullRoll/2^32 < gullbongFreq
+    extras: log.extras ? {
+      gullbongSlot: log.extras.gullbongSlot, gullRoll: log.extras.gullRoll, gullSlot: log.extras.gullSlot,
+      gullbongFreq: GULLBONG_FREQ, bonusBall: log.extras.bonus,
+    } : null,
     at: log.at,
   });
 }

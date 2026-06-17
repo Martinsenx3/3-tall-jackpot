@@ -58,6 +58,8 @@ paths:
                       cooloffPresets: { type: array, items: { type: string }, example: ["15m", "1t", "24t", "7d"] }
                       rgEditable: { type: boolean, description: true i mock (spiller setter grenser i spillet), false i operator }
                       licence: { type: string }
+                      gullbong: { type: object, properties: { enabled: { type: boolean }, mult: { type: integer, example: 2 }, freq: { type: number, example: 0.25, description: andel av rundene som er gullbong-runder } } }
+                      bonusBall: { type: object, properties: { enabled: { type: boolean }, pct: { type: integer, example: 50 } } }
                   rg: { $ref: "#/components/schemas/RgState" }
                   fair: { $ref: "#/components/schemas/Fair" }
                   jackpots: { $ref: "#/components/schemas/Jackpots" }
@@ -179,6 +181,16 @@ paths:
                   serverSeed: { type: string, description: Avslørt frø (hex) }
                   commit: { type: string, description: sha256(serverSeed) publisert på forhånd }
                   numbers: { type: array, items: { type: integer } }
+                  extras:
+                    type: object
+                    nullable: true
+                    description: Premie-boosts utledet av frøet (Gullbong + Bonusball) — rå input så gullActive er reproduserbar
+                    properties:
+                      gullbongSlot: { type: integer, description: "Gullbong-plass 0..3, eller -1 (inaktiv runde)" }
+                      gullRoll: { type: integer, description: "Rå u32 fra frøet; gullActive = gullRoll/2^32 < gullbongFreq" }
+                      gullSlot: { type: integer, description: "Rå plass 0..3 (uavhengig av aktiv/inaktiv)" }
+                      gullbongFreq: { type: number, description: "Aktiverings-terskel (0..1), del av fairness-kontrakten" }
+                      bonusBall: { type: integer, description: Gyllen bonusball 1..20 }
                   at: { type: integer, description: epoch ms }
         "400": { description: INVALID_ROUND }
         "404": { description: NO_ROUND (ukjent eller for gammel) }
@@ -266,7 +278,8 @@ paths:
       summary: SSE-strøm av den felles trekningen
       description: >
         `event: hello` ved tilkobling {round, msToNext, intervalMs, jackpots, fair};
-        `event: round` per trekning {n, numbers[4], intervalMs, jackpots, fair};
+        `event: round` per trekning {n, numbers[4], intervalMs, jackpots, fair, extras};
+        `extras` = {gullbongSlot, gullMult, bonusBall, bonusPct} (premie-boosts, se /api/verify);
         `event: players` {players}; `event: results` (anonymisert vinnerfeed).
         `fair` bærer forpliktelse for neste runde + avsløring av forrige (commit–reveal).
         Keepalive-ping hvert 20. sekund.

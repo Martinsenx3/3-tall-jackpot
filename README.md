@@ -17,6 +17,10 @@ integreres mot en operatørs lommebok og kundedatabase (ekte penger, under konse
 - **Ansvarlig spill:** taps-/spilletidsgrenser, reality-check, pause/selvutestenging,
   RTP-merke, demo-vs-ekte-indikator, 18+/Hjelpelinjen-stripe og transaksjonshistorikk.
   Spillet håndhever som UX-lag; operatøren er fasit (se INTEGRATION.md).
+- **Premie-boosts:** Gullbong (×2 på én tilfeldig bong i ~25 % av rundene) og Bonusball
+  (+50 % når en gyllen femte ball treffer en vinnende bong). Begge utledes av det
+  provably-fair-frøet (verifiserbare). Øker RTP — `node rtp-sim.js` regner ut virkningen;
+  RTP-verifisering hos testhus utestående (se INTEGRATION.md).
 
 ## Kjør
 
