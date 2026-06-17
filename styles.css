@@ -455,7 +455,7 @@ body.no-sparkle #sparkles{display:none}
   .ticker { display: none; }
 
   /* the canvas content becomes a single scrolling column */
-  .wrap { position: static; inset: auto; padding: 46px 10px 64px; gap: 12px; }   /* bottom clears the fixed 18+/Hjelpelinjen bar */
+  .wrap { position: static; inset: auto; padding: 46px 10px 22px; gap: 12px; }
   .main { display: contents; }
   .col { display: contents; }
   .subrow { display: flex; flex-direction: column; gap: 10px; order: 8; }
@@ -665,9 +665,12 @@ body.no-sparkle #sparkles{display:none}
 .fair-badge.bad{border-color:rgba(255,110,120,.6);color:#ffb3ba;background:linear-gradient(180deg,rgba(60,14,20,.85),rgba(28,6,9,.85))}
 .fair-badge.neutral{color:var(--gold-1);border-color:rgba(255,221,138,.3)}
 
-/* always-on 18+/help/licence strip (bottom-left, above the ticker) */
-.rg-strip{position:absolute;bottom:36px;left:18px;z-index:8;display:flex;align-items:center;gap:9px;flex-wrap:wrap;
-  font-family:'Oswald',sans-serif;font-size:12px;color:rgba(234,242,255,.66);max-width:46%}
+/* always-on 18+/help/licence strip — sits above the HOT/COLD panel */
+.hc-side{width:440px;display:flex;flex-direction:column;gap:8px}
+.hc-side .hotcold{width:100%;flex:1}
+.rg-strip{display:flex;align-items:center;justify-content:center;gap:9px;flex-wrap:wrap;
+  font-family:'Oswald',sans-serif;font-size:12.5px;color:rgba(234,242,255,.72);
+  padding:6px 12px;border-radius:12px;background:rgba(4,8,18,.4);border:1px solid rgba(150,190,255,.12)}
 .age-pill{font-weight:700;font-size:11px;letter-spacing:.04em;color:#2a1c05;background:linear-gradient(180deg,var(--gold-1),var(--gold-3));border-radius:999px;padding:2px 8px}
 .rg-help{color:var(--gold-1);text-decoration:none;border-bottom:1px dotted rgba(255,221,138,.5)}
 .rg-help:hover{filter:brightness(1.15)}
@@ -742,8 +745,8 @@ body.no-sparkle #sparkles{display:none}
   .trust-strip{position:fixed;top:42px;left:6px;right:6px;z-index:19;flex-direction:row;flex-wrap:wrap;gap:5px;justify-content:center}
   .wrap{padding-top:84px}   /* clear the fixed top button bar + the trust strip */
   .mode-badge,.rtp-badge,.sess-timer,.fair-badge{font-size:10px;padding:4px 8px}
-  /* keep the 18+/Hjelpelinjen strip persistently visible (the ticker is hidden on mobile, so the bottom edge is free) */
-  .rg-strip{position:fixed;left:0;right:0;bottom:0;max-width:none;justify-content:center;margin:0;padding:7px 10px;background:rgba(4,8,18,.85);backdrop-filter:blur(4px);z-index:20}
+  .hc-side{width:100%}
+  .rg-strip{font-size:11px}
   .rg-grid{grid-template-columns:1fr 1fr 1fr;gap:6px}
   .rg-stat b{font-size:16px}
   .rg-limits{grid-template-columns:1fr}

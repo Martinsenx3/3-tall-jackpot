@@ -1169,8 +1169,7 @@ async function boot() {
     startSessionTimer();
     startRealityCheck();
     connect();
-    maybeShowIntro();
-    if (introEl.hidden) maybeShowBonus();   // first-time players see the guide; returning players get the bonus
+    // No auto popups before the game starts — the guide is available via the “?” button.
   } catch (e) {
     /* A responsible-gaming launch block is NOT a connection error — show the lock, don't retry into play. */
     if (e.code === "SELF_EXCLUDED" || e.code === "COOLOFF_ACTIVE") {
