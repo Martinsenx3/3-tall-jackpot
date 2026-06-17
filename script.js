@@ -431,6 +431,7 @@ function runRound(roundId, numbers) {
     void revealEl.offsetWidth;
     revealEl.classList.add("fill");
     Sound.reveal();
+    if (participating) markHits(n, idxs);   // place the number on the bong the instant it's drawn
     drawTimer = setTimeout(() => {
       revealEl.classList.remove("fill");
       revealEl.classList.add("drop");
@@ -440,7 +441,7 @@ function runRound(roundId, numbers) {
         drawn.push(n);
         addDrawnBall(n);
         Sound.land();
-        if (participating) { markHits(n, idxs); updateNearWin(drawn, idxs); paintPaylines(idxs, drawn); }
+        if (participating) { updateNearWin(drawn, idxs); paintPaylines(idxs, drawn); }
         i += 1;
         const near = participating && i < numbers.length && idxs.some((id) => getHitCount(myTickets[id].mid, drawn) === 2);
         tenseNext = near;
